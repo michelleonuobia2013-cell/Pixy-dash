@@ -1,9 +1,11 @@
-import { FastForward, Magnet, Pause, Shield, Zap } from 'lucide-react';
+import { Eye, FastForward, Magnet, Pause, Shield, Zap } from 'lucide-react';
 import { HudSnapshot, TutorialStepId } from '../types/game';
 
 interface GameHUDProps {
   hud: HudSnapshot;
   compactLayout: boolean;
+  isSpectator?: boolean;
+  roomCode?: string | null;
   onPause: () => void;
   onSkipTutorial: () => void;
 }
@@ -43,6 +45,8 @@ const TUTORIAL_COPY: Record<Exclude<TutorialStepId, 'complete'>, { step: string;
 export function GameHUD({
   hud,
   compactLayout,
+  isSpectator,
+  roomCode,
   onPause,
   onSkipTutorial,
 }: GameHUDProps) {
@@ -57,21 +61,42 @@ export function GameHUD({
           compactLayout ? 'px-4 py-2.5' : 'px-3 py-3 sm:px-5 sm:py-4'
         }`}
       >
-        {/* Top-Left: Clean Dedicated Pause Icon */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.currentTarget.blur();
-            onPause();
-          }}
-          title="Pause & Settings (Esc / P)"
-          aria-label="Pause"
-          className={`pointer-events-auto flex items-center justify-center rounded-xl border border-slate-700/80 bg-slate-950/85 text-slate-100 shadow-lg backdrop-blur-md transition-colors hover:border-orange-500/70 hover:bg-slate-900 active:scale-95 focus-visible:outline-2 focus-visible:outline-orange-500 shrink-0 ${
-            compactLayout ? 'h-10 w-10' : 'h-11 w-11'
-          }`}
-        >
-          <Pause className="h-5 w-5 text-orange-400" />
-        </button>
+        <div className="flex items-center gap-2.5">
+          {/* Top-Left: Clean Dedicated Pause Icon */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              onPause();
+            }}
+            title="Pause & Settings (Esc / P)"
+            aria-label="Pause"
+            className={`pointer-events-auto flex items-center justify-center rounded-xl border border-slate-700/80 bg-slate-950/85 text-slate-100 shadow-lg backdrop-blur-md transition-colors hover:border-orange-500/70 hover:bg-slate-900 active:scale-95 focus-visible:outline-2 focus-visible:outline-orange-500 shrink-0 ${
+              compactLayout ? 'h-10 w-10' : 'h-11 w-11'
+            }`}
+          >
+            <Pause className="h-5 w-5 text-orange-400" />
+          </button>
+
+          {!tutorial.active && (
+            <div className="hidden md:flex flex-col rounded-lg border border-slate-800/70 bg-slate-950/70 px-3 py-1.5 backdrop-blur-md">
+              <div className="text-xs font-semibold text-slate-100">
+                {hud.districtName}
+                {roomCode ? ` · Room ${roomCode}` : ''}
+              </div>
+              <div className="text-[11px] text-slate-400">
+                {hud.timeOfDayLabel} · {hud.weatherLabel}
+              </div>
+            </div>
+          )}
+
+          {isSpectator && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-cyan-500/60 bg-cyan-950/80 px-3 py-1.5 text-xs font-semibold text-cyan-200 backdrop-blur-md">
+              <Eye className="h-3.5 w-3.5" />
+              <span>Spectator Mode</span>
+            </div>
+          )}
+        </div>
 
         {/* Top-Right: Unobtrusive Live Run Telemetry & Active Power-Ups */}
         <div className="flex flex-col items-end gap-1.5">
@@ -98,7 +123,16 @@ export function GameHUD({
             <span className="font-semibold text-orange-400">{hud.distanceMeters} m</span>
 
             <span aria-hidden="true" className="text-slate-600">·</span>
-            <span className="font-semibold text-slate-200">{hud.takedownsCount} KOs</span>
+            <span className="font-semibold text-amber-300">+{hud.coinsEarned}c</span>
+
+            {hud.totalRacers > 1 && !tutorial.active && (
+              <>
+                <span aria-hidden="true" className="text-slate-600">·</span>
+                <span className="font-bold text-cyan-300">
+                  #{hud.racePosition}/{hud.totalRacers}
+                </span>
+              </>
+            )}
 
             {!tutorial.active && (
               <>
@@ -134,6 +168,14 @@ export function GameHUD({
                 </div>
                 <span className="text-slate-100">{hud.highPlaceStreak}/5</span>
               </div>
+
+              {hud.wallRunActive && (
+                <span className="font-bold text-cyan-300">WALL-RUN</span>
+              )}
+
+              {hud.sprintActive && (
+                <span className="font-bold text-emerald-300">SPRINT</span>
+              )}
 
               {hud.comboMultiplier > 1 && (
                 <span className="font-bold text-amber-300">

@@ -1,7 +1,16 @@
-import { RunnerAction } from '../types/game';
+import {
+  CharacterCustomization,
+  ReplayFrame,
+  RunnerAction,
+} from '../types/game';
 import { WORLD_BIOMES, WorldBiomeStyle } from '../levels/biomes';
 import { HIGH_PLACE_Y_THRESHOLD, LAVA_SURFACE_Y } from '../levels/courses';
-import { getPlatformBounds, WorldRuntime } from './physics';
+import {
+  getPlatformBounds,
+  getVanishingPlatformState,
+  isTimedGateOpen,
+  WorldRuntime,
+} from './physics';
 
 const FAR_BUILDINGS = Array.from({ length: 24 }, (_, i) => ({
   x: i * 160,
@@ -89,7 +98,15 @@ function traceRoundedRect(
   ctx.closePath();
 }
 
-function drawArticulatedRunner(
+const SNEAKER_PALETTE: Record<string, { sole: string; trim: string }> = {
+  ember: { sole: '#F97316', trim: '#FDBA74' },
+  cyanPulse: { sole: '#06B6D4', trim: '#A5F3FC' },
+  volt: { sole: '#84CC16', trim: '#ECFCCB' },
+  obsidian: { sole: '#334155', trim: '#94A3B8' },
+  goldApex: { sole: '#F59E0B', trim: '#FEF08A' },
+};
+
+export function drawArticulatedRunner(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
@@ -102,7 +119,8 @@ function drawArticulatedRunner(
   squashY: number,
   isAfterimage: boolean,
   alpha = 1,
-  afterimageTint?: { body: string; outline: string; accent: string }
+  afterimageTint?: { body: string; outline: string; accent: string },
+  customization?: CharacterCustomization
 ) {
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -112,16 +130,23 @@ function drawArticulatedRunner(
   ctx.translate(cx, bottomY);
   ctx.scale(facing * squashX, squashY);
 
-  const bodyColor = isAfterimage ? (afterimageTint?.body ?? '#EA580C') : '#0F172A';
+  const jacket = customization?.jacketColor ?? '#0F172A';
+  const trouser = customization?.trouserColor ?? '#1E293B';
+  const scarf = customization?.scarfColor ?? '#F97316';
+  const sneaker = SNEAKER_PALETTE[customization?.sneakerStyle ?? 'ember'] ?? SNEAKER_PALETTE.ember;
+  const model = customization?.model ?? 'pixy';
+
+  const bodyColor = isAfterimage ? (afterimageTint?.body ?? '#EA580C') : jacket;
+  const legColor = isAfterimage ? (afterimageTint?.body ?? '#EA580C') : trouser;
   const outlineColor = isAfterimage ? (afterimageTint?.outline ?? '#FEF08A') : '#F8FAFC';
-  const accentColor = isAfterimage ? (afterimageTint?.accent ?? '#FDBA74') : '#F97316';
+  const accentColor = isAfterimage ? (afterimageTint?.accent ?? '#FDBA74') : scarf;
 
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
   let hipY = -24;
   let torsoLean = 0.22;
-  const headR = 6.4;
+  const headR = model === 'vex' ? 6.8 : 6.4;
 
   let leg1Knee = { x: 4, y: -12 };
   let leg1Foot = { x: 2, y: 0 };
@@ -146,13 +171,32 @@ function drawArticulatedRunner(
     arm1Hand = { x: -s * 14 + 10, y: -22 - c * 4 };
     arm2Elbow = { x: s * 10 + 4, y: -29 };
     arm2Hand = { x: s * 14 + 10, y: -22 + c * 4 };
-  } else if (action === 'jump' || action === 'doubleJump') {
+  } else if (action === 'wallRun') {
+    const phase = animTime * 19;
+    const s = Math.sin(phase);
     hipY = -25;
-    torsoLean = action === 'doubleJump' ? 0.45 : 0.22;
-    leg1Knee = { x: 10, y: -15 };
-    leg1Foot = { x: 6, y: -4 };
+    torsoLean = 0.56;
+    leg1Knee = { x: s * 9 + 6, y: -14 };
+    leg1Foot = { x: s * 12 + 5, y: -4 };
+    leg2Knee = { x: -s * 9 + 4, y: -13 };
+    leg2Foot = { x: -s * 12 + 2, y: -2 };
+    arm1Elbow = { x: 9, y: -34 };
+    arm1Hand = { x: 16, y: -42 };
+    arm2Elbow = { x: -6, y: -30 };
+    arm2Hand = { x: -12, y: -24 };
+  } else if (action === 'jump' || action === 'doubleJump') {
+    const jStyle = customization?.jumpStyle ?? 'stride';
+    if (!isAfterimage && ((action === 'doubleJump' && jStyle === 'flip') || jStyle === 'spin')) {
+      ctx.translate(0, -26);
+      ctx.rotate(animTime * (jStyle === 'spin' ? 16 : 20));
+      ctx.translate(0, 26);
+    }
+    hipY = -25;
+    torsoLean = action === 'doubleJump' ? 0.45 : jStyle === 'aerial' ? 0.36 : 0.22;
+    leg1Knee = jStyle === 'aerial' ? { x: 13, y: -16 } : { x: 10, y: -15 };
+    leg1Foot = jStyle === 'aerial' ? { x: 16, y: -8 } : { x: 6, y: -4 };
     leg2Knee = { x: -6, y: -11 };
-    leg2Foot = { x: -12, y: -2 };
+    leg2Foot = jStyle === 'aerial' ? { x: -16, y: -6 } : { x: -12, y: -2 };
     arm1Elbow = { x: 9, y: -38 };
     arm1Hand = { x: 14, y: -46 };
     arm2Elbow = { x: -8, y: -32 };
@@ -191,22 +235,47 @@ function drawArticulatedRunner(
     arm2Elbow = { x: 4, y: -15 };
     arm2Hand = { x: 11, y: -12 };
   } else if (action === 'roll') {
-    ctx.translate(0, -13);
-    ctx.rotate(animTime * 24);
-    ctx.fillStyle = bodyColor;
-    ctx.strokeStyle = outlineColor;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, 12, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.strokeStyle = accentColor;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(0, 0, 8, 0, Math.PI * 1.25);
-    ctx.stroke();
-    ctx.restore();
-    return;
+    const lStyle = customization?.landStyle ?? 'roll';
+    if (lStyle === 'slam') {
+      hipY = -14;
+      torsoLean = 0.65;
+      leg1Knee = { x: 10, y: -7 };
+      leg1Foot = { x: 9, y: 0 };
+      leg2Knee = { x: -8, y: -6 };
+      leg2Foot = { x: -11, y: 0 };
+      arm1Elbow = { x: 11, y: -14 };
+      arm1Hand = { x: 14, y: -2 };
+      arm2Elbow = { x: -10, y: -22 };
+      arm2Hand = { x: -16, y: -15 };
+    } else if (lStyle === 'balance') {
+      hipY = -18;
+      torsoLean = 0.12;
+      leg1Knee = { x: 8, y: -9 };
+      leg1Foot = { x: 10, y: 0 };
+      leg2Knee = { x: -7, y: -9 };
+      leg2Foot = { x: -10, y: 0 };
+      arm1Elbow = { x: 13, y: -28 };
+      arm1Hand = { x: 20, y: -25 };
+      arm2Elbow = { x: -13, y: -28 };
+      arm2Hand = { x: -20, y: -25 };
+    } else {
+      ctx.translate(0, -13);
+      ctx.rotate(animTime * 24);
+      ctx.fillStyle = bodyColor;
+      ctx.strokeStyle = outlineColor;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 1.25);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
   } else if (action === 'grind') {
     hipY = -22;
     torsoLean = 0.14;
@@ -248,6 +317,20 @@ function drawArticulatedRunner(
   const headX = shoulderX + Math.sin(torsoLean * 0.7) * 8;
   const headY = shoulderY - Math.cos(torsoLean * 0.7) * 8;
 
+  // Aero Jet Fins accessory behind torso
+  if (!isAfterimage && customization?.accessory === 'wings') {
+    ctx.fillStyle = accentColor;
+    ctx.strokeStyle = outlineColor;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(shoulderX - 2, shoulderY + 3);
+    ctx.lineTo(shoulderX - 18, shoulderY - 9);
+    ctx.lineTo(shoulderX - 13, shoulderY + 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
   ctx.strokeStyle = isAfterimage ? '#EA580C' : '#334155';
   ctx.lineWidth = 4;
   ctx.beginPath();
@@ -256,14 +339,21 @@ function drawArticulatedRunner(
   ctx.lineTo(arm2Hand.x, arm2Hand.y);
   ctx.stroke();
 
+  ctx.strokeStyle = isAfterimage ? '#EA580C' : legColor;
+  ctx.lineWidth = 4.3;
   ctx.beginPath();
   ctx.moveTo(0, hipY);
   ctx.lineTo(leg2Knee.x, leg2Knee.y);
   ctx.lineTo(leg2Foot.x, leg2Foot.y);
   ctx.stroke();
 
+  if (!isAfterimage) {
+    ctx.fillStyle = sneaker.sole;
+    ctx.fillRect(leg2Foot.x - 2, leg2Foot.y - 2.4, 6, 2.8);
+  }
+
   ctx.strokeStyle = bodyColor;
-  ctx.lineWidth = 7.5;
+  ctx.lineWidth = model === 'kuro' ? 7 : 7.8;
   ctx.beginPath();
   ctx.moveTo(0, hipY);
   ctx.lineTo(shoulderX, shoulderY);
@@ -278,7 +368,7 @@ function drawArticulatedRunner(
     ctx.stroke();
   }
 
-  ctx.strokeStyle = bodyColor;
+  ctx.strokeStyle = legColor;
   ctx.lineWidth = 4.6;
   ctx.beginPath();
   ctx.moveTo(0, hipY);
@@ -287,10 +377,13 @@ function drawArticulatedRunner(
   ctx.stroke();
 
   if (!isAfterimage) {
-    ctx.fillStyle = accentColor;
-    ctx.fillRect(leg1Foot.x - 2, leg1Foot.y - 2.5, 6, 3);
+    ctx.fillStyle = sneaker.sole;
+    ctx.fillRect(leg1Foot.x - 2, leg1Foot.y - 2.6, 6.5, 3);
+    ctx.fillStyle = sneaker.trim;
+    ctx.fillRect(leg1Foot.x - 1, leg1Foot.y - 0.8, 5, 1.2);
   }
 
+  // Head
   ctx.fillStyle = bodyColor;
   ctx.beginPath();
   ctx.arc(headX, headY, headR, 0, Math.PI * 2);
@@ -300,9 +393,65 @@ function drawArticulatedRunner(
   ctx.lineWidth = isAfterimage ? 1.8 : 1.5;
   ctx.stroke();
 
+  // Hairstyles
   if (!isAfterimage) {
-    ctx.fillStyle = accentColor;
-    ctx.fillRect(headX + 1, headY - 2, 5.4, 2.8);
+    const hair = customization?.hairStyle ?? 'spiky';
+    ctx.fillStyle = model === 'aria' ? '#F8FAFC' : model === 'nova' ? '#38BDF8' : accentColor;
+    if (hair === 'spiky') {
+      ctx.beginPath();
+      ctx.moveTo(headX - 4, headY - 4);
+      ctx.lineTo(headX - 7, headY - 11);
+      ctx.lineTo(headX - 1, headY - 7);
+      ctx.lineTo(headX + 2, headY - 12);
+      ctx.lineTo(headX + 5, headY - 5);
+      ctx.closePath();
+      ctx.fill();
+    } else if (hair === 'ponytail') {
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 3.2;
+      ctx.beginPath();
+      ctx.moveTo(headX - 5, headY - 2);
+      ctx.quadraticCurveTo(headX - 12, headY - 4, headX - 15, headY + 4 + Math.sin(animTime * 14) * 2);
+      ctx.stroke();
+    } else if (hair === 'hood') {
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(headX - 1, headY, headR + 1.8, Math.PI * 0.65, Math.PI * 1.85);
+      ctx.stroke();
+    } else if (hair === 'mohawk') {
+      ctx.fillRect(headX - 2, headY - headR - 5, 5, 5.5);
+    } else if (hair === 'swept') {
+      ctx.beginPath();
+      ctx.moveTo(headX + 4, headY - 5);
+      ctx.quadraticCurveTo(headX - 3, headY - 12, headX - 11, headY - 6);
+      ctx.lineTo(headX - 3, headY - 3);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Visor / Eyes
+    ctx.fillStyle = customization?.accessory === 'visor' ? '#38BDF8' : accentColor;
+    ctx.fillRect(headX + 1, headY - 2.2, customization?.accessory === 'visor' ? 6.5 : 5.4, 2.8);
+
+    // Skyline Halo or Apex Crown
+    if (customization?.accessory === 'halo') {
+      ctx.strokeStyle = '#38BDF8';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.ellipse(headX, headY - headR - 5.5, 6.5, 2.1, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (customization?.accessory === 'crown') {
+      ctx.fillStyle = '#FACC15';
+      ctx.beginPath();
+      ctx.moveTo(headX - 5, headY - headR);
+      ctx.lineTo(headX - 4, headY - headR - 6);
+      ctx.lineTo(headX, headY - headR - 3);
+      ctx.lineTo(headX + 3, headY - headR - 6.5);
+      ctx.lineTo(headX + 5, headY - headR);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   ctx.strokeStyle = bodyColor;
@@ -313,6 +462,66 @@ function drawArticulatedRunner(
   ctx.lineTo(arm1Hand.x, arm1Hand.y);
   ctx.stroke();
 
+  ctx.restore();
+}
+
+export function renderCharacterPreview(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  customization: CharacterCustomization,
+  animTime: number,
+  action: RunnerAction = 'run',
+  facing: 1 | -1 = 1
+) {
+  ctx.clearRect(0, 0, w, h);
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
+  bgGrad.addColorStop(0, '#0F172A');
+  bgGrad.addColorStop(1, '#1E293B');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, w, h);
+
+  // Subtle floor pedestal glow
+  ctx.fillStyle = 'rgba(249, 115, 22, 0.22)';
+  ctx.beginPath();
+  ctx.ellipse(w * 0.5, h * 0.82, 54, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(w * 0.5, h * 0.8);
+  const scale = 2.45;
+  ctx.scale(scale, scale);
+
+  // Flowing scarf ribbon behind preview character
+  ctx.strokeStyle = customization.scarfColor;
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-2 * facing, -39);
+  for (let i = 1; i <= 5; i++) {
+    ctx.lineTo(
+      (-2 - i * 4.2) * facing,
+      -39 + i * 1.6 + Math.sin(animTime * 8 + i * 0.8) * 2.1
+    );
+  }
+  ctx.stroke();
+
+  drawArticulatedRunner(
+    ctx,
+    -13,
+    -54,
+    26,
+    54,
+    facing,
+    action,
+    animTime,
+    1,
+    1,
+    false,
+    1,
+    undefined,
+    customization
+  );
   ctx.restore();
 }
 
@@ -534,6 +743,25 @@ function resolveDynamicBiome(world: WorldRuntime): DynamicBiome {
   weights[from.id] += 1 - smoothT;
   weights[to.id] += smoothT;
 
+  const weatherOverride = world.course.weatherOverride;
+  const resolvedWeather: DynamicBiome['weather'] =
+    weatherOverride === 'heavyRain' || weatherOverride === 'rain'
+      ? 'rain'
+      : weatherOverride === 'storm'
+      ? 'storm'
+      : weatherOverride === 'fog'
+      ? 'mist'
+      : weatherOverride === 'wind'
+      ? 'wind'
+      : weatherOverride === 'sunny'
+      ? 'clear'
+      : smoothT >= 0.5
+      ? to.weather
+      : from.weather;
+  const tod = world.course.timeOfDayOverride;
+  const isNight =
+    tod === 'night' ? true : tod === 'day' || tod === 'sunrise' ? false : smoothT >= 0.5 ? to.isNight : from.isNight;
+
   return {
     style: to.id,
     skyTop: lerpHexColor(from.skyTop, to.skyTop, smoothT),
@@ -545,20 +773,28 @@ function resolveDynamicBiome(world: WorldRuntime): DynamicBiome {
     buildingStroke: lerpHexColor(from.buildingStroke, to.buildingStroke, smoothT),
     ledgeHighlight: lerpHexColor(from.ledgeHighlight, to.ledgeHighlight, smoothT),
     horizonGlow: lerpHexColor(from.horizonGlow, to.horizonGlow, smoothT),
-    isNight: smoothT >= 0.5 ? to.isNight : from.isNight,
-    weather: smoothT >= 0.5 ? to.weather : from.weather,
+    isNight,
+    weather: resolvedWeather,
     weights,
   };
+}
+
+export interface RenderOverride {
+  frameOverride?: ReplayFrame;
+  camOffset?: { dx: number; dy: number; zoomMult: number };
 }
 
 export function renderWorld(
   ctx: CanvasRenderingContext2D,
   world: WorldRuntime,
   viewW: number,
-  viewH: number
+  viewH: number,
+  override?: RenderOverride
 ) {
   const theme = resolveDynamicBiome(world);
   const weather = theme.weather;
+  const isHeavyRain = world.course.weatherOverride === 'heavyRain';
+  const simTime = override?.frameOverride ? override.frameOverride.t : world.simTime;
 
   // 1. Full-bleed Sky Gradient
   const skyGrad = ctx.createLinearGradient(0, 0, 0, viewH);
@@ -825,19 +1061,82 @@ export function renderWorld(
     ctx.restore();
   }
 
-  // 5. Speed-Reactive Camera with 1x / x2 / x3 Zoom Support
+  // Living City: Moving Traffic Lanes Far Below & Distant Patrolling Helicopters
   ctx.save();
-  const shakeX = world.shakeTimer > 0 ? (Math.random() - 0.5) * world.shakeMagnitude * 2 : 0;
-  const shakeY = world.shakeTimer > 0 ? (Math.random() - 0.5) * world.shakeMagnitude * 2 : 0;
+  const trafficY = viewH * 0.84;
+  ctx.fillStyle = 'rgba(2, 6, 23, 0.35)';
+  ctx.fillRect(0, trafficY - 5, viewW, 14);
+  for (let i = 0; i < 18; i++) {
+    const lane = i % 2;
+    const speed = lane === 0 ? 115 : -95;
+    const tx = (((i * 190 + simTime * speed - world.cameraX * 0.22) % (viewW + 180)) + (viewW + 180)) % (viewW + 180) - 90;
+    const ty = trafficY + (lane === 0 ? -1 : 5);
+    ctx.fillStyle = lane === 0 ? '#FEF08A' : '#FB7185';
+    ctx.fillRect(tx, ty, 12, 2.5);
+    ctx.fillStyle = lane === 0 ? 'rgba(254, 240, 138, 0.25)' : 'rgba(251, 113, 133, 0.22)';
+    ctx.fillRect(lane === 0 ? tx - 14 : tx + 10, ty, 14, 2.5);
+  }
+
+  // Distant Patrolling Helicopters with Spinning Rotors & Spotlights
+  for (let h = 0; h < 2; h++) {
+    const hx =
+      (((h * 640 + simTime * (34 + h * 14) - world.cameraX * 0.18) % (viewW + 320)) + (viewW + 320)) %
+        (viewW + 320) -
+      140;
+    const hy = viewH * (0.24 + h * 0.13) + Math.sin(simTime * 1.9 + h * 2) * 8;
+    ctx.save();
+    ctx.translate(hx, hy);
+    // Searchlight cone
+    const cone = ctx.createLinearGradient(0, 4, 28, 120);
+    cone.addColorStop(0, theme.isNight ? 'rgba(186, 230, 253, 0.22)' : 'rgba(255, 255, 255, 0.08)');
+    cone.addColorStop(1, 'rgba(186, 230, 253, 0)');
+    ctx.fillStyle = cone;
+    ctx.beginPath();
+    ctx.moveTo(4, 5);
+    ctx.lineTo(44, 120);
+    ctx.lineTo(-4, 120);
+    ctx.closePath();
+    ctx.fill();
+
+    // Helicopter fuselage & tail boom
+    ctx.fillStyle = theme.midCity;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 14, 5.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(-24, -1.5, 14, 2.5);
+    ctx.fillRect(-25, -6, 2, 7);
+    // Rotor blur
+    const rotorW = 14 + Math.sin(simTime * 46 + h) * 8;
+    ctx.strokeStyle = 'rgba(226, 232, 240, 0.58)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(-rotorW, -7.5);
+    ctx.lineTo(rotorW, -7.5);
+    ctx.stroke();
+    // Strobe blink
+    if (Math.sin(simTime * 7 + h) > 0.5) {
+      ctx.fillStyle = '#EF4444';
+      ctx.beginPath();
+      ctx.arc(-24, -6, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+
+  // 5. Speed-Reactive Camera with 1x / x2 / x3 Zoom Support + Replay/Photo Overrides
+  ctx.save();
+  const shakeX = override?.frameOverride || world.shakeTimer <= 0 ? 0 : (Math.random() - 0.5) * world.shakeMagnitude * 2;
+  const shakeY = override?.frameOverride || world.shakeTimer <= 0 ? 0 : (Math.random() - 0.5) * world.shakeMagnitude * 2;
 
   const baseScale = Math.max(0.46, Math.min(0.76, viewH / 1020));
   const speedFovOut = Math.min(0.032, Math.max(0, (world.player.vx - 460) * 0.00013));
-  const zoomMult = Math.max(1, world.cameraZoom || 1);
+  const zoomMult = Math.max(0.7, (world.cameraZoom || 1) * (override?.camOffset?.zoomMult ?? 1));
   const scale = Math.max(0.44, baseScale - speedFovOut + world.zoomPunch) * zoomMult;
 
   const zoomT = Math.min(1, Math.max(0, zoomMult - 1));
-  const focusX = world.cameraX + 340;
-  const focusY = world.cameraY + 680;
+  const focusX = (override?.frameOverride ? Math.max(0, override.frameOverride.x - 320) : world.cameraX) + 340 + (override?.camOffset?.dx ?? 0);
+  const focusY = (override?.frameOverride ? override.frameOverride.y - 620 : world.cameraY) + 680 + (override?.camOffset?.dy ?? 0);
   const baseCamX = Math.max(0, focusX - Math.max(260, (viewW * 0.26) / scale));
   const zoomedCamX = Math.max(0, focusX - (viewW * 0.24) / scale);
   const anchorY = 0.59 - zoomT * 0.04;
@@ -848,6 +1147,27 @@ export function renderWorld(
   const scaledViewW = viewW / scale;
   const scaledViewH = viewH / scale;
   ctx.translate(-renderCamX + shakeX, -renderCamY + shakeY);
+
+  // Wind Zones (Aerial Crosswind & Updraft Ribbons)
+  for (const wz of world.windZones) {
+    if (wz.x + wz.w < renderCamX - 90 || wz.x > renderCamX + scaledViewW + 90) continue;
+    ctx.save();
+    ctx.fillStyle = 'rgba(186, 230, 253, 0.08)';
+    ctx.fillRect(wz.x, wz.y, wz.w, wz.h);
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.42)';
+    ctx.lineWidth = 2;
+    for (let r = 0; r < 5; r++) {
+      const ry = wz.y + ((r + 0.5) / 5) * wz.h;
+      const shift = (((simTime * 220 * (wz.forceX >= 0 ? 1 : -1) + r * 65) % wz.w) + wz.w) % wz.w;
+      const rx = wz.x + shift;
+      const len = Math.min(48, wz.w - shift);
+      ctx.beginPath();
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(rx + len, ry + (wz.forceY < 0 ? -8 : 0));
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
   // Thermal Lava Updraft Vents (Rising Molten Heat Columns over Wide Chasms)
   for (const vent of world.thermalVents) {
@@ -1068,9 +1388,10 @@ export function renderWorld(
 
   // Platforms
   for (const plat of world.platforms) {
-    const b = getPlatformBounds(plat, world.simTime);
+    const b = getPlatformBounds(plat, simTime);
     if (b.x + plat.w < renderCamX - 100 || b.x > renderCamX + scaledViewW + 100) continue;
     if (b.y > renderCamY + scaledViewH + 160 || b.y + plat.h < renderCamY - 120) continue;
+    const vanish = getVanishingPlatformState(plat, simTime);
 
     if (plat.prop === 'antenna') {
       ctx.strokeStyle = '#475569';
@@ -1081,7 +1402,7 @@ export function renderWorld(
       ctx.moveTo(b.x + 48, b.y - 54);
       ctx.lineTo(b.x + 72, b.y - 54);
       ctx.stroke();
-      const beaconAlpha = 0.5 + 0.5 * Math.sin(world.simTime * 6);
+      const beaconAlpha = 0.5 + 0.5 * Math.sin(simTime * 6);
       ctx.fillStyle = `rgba(239, 68, 68, ${beaconAlpha})`;
       ctx.beginPath();
       ctx.arc(b.x + 60, b.y - 80, 4.5, 0, Math.PI * 2);
@@ -1092,11 +1413,10 @@ export function renderWorld(
       ctx.fillStyle = '#1E293B';
       ctx.fillRect(b.x + 50, b.y - 20, 14, 14);
       ctx.fillRect(b.x + 70, b.y - 20, 14, 14);
-      // Animated rising HVAC steam puffs
       ctx.save();
       for (let puff = 0; puff < 3; puff++) {
-        const cycle = (world.simTime * 0.75 + puff * 0.33 + (b.x % 100) * 0.01) % 1;
-        const px = b.x + 68 - cycle * 24 + Math.sin(world.simTime * 4 + puff) * 4;
+        const cycle = (simTime * 0.75 + puff * 0.33 + (b.x % 100) * 0.01) % 1;
+        const px = b.x + 68 - cycle * 24 + Math.sin(simTime * 4 + puff) * 4;
         const py = b.y - 30 - cycle * 44;
         ctx.fillStyle = `rgba(226, 232, 240, ${(1 - cycle) * 0.28})`;
         ctx.beginPath();
@@ -1122,6 +1442,34 @@ export function renderWorld(
       ctx.lineTo(b.x + 96, b.y - 72);
       ctx.closePath();
       ctx.fill();
+    } else if (plat.prop === 'billboard') {
+      const bx = b.x + Math.min(90, plat.w * 0.28);
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(bx + 12, b.y - 96, 6, 96);
+      ctx.fillRect(bx + 76, b.y - 96, 6, 96);
+      ctx.fillStyle = '#0F172A';
+      ctx.strokeStyle = theme.ledgeHighlight;
+      ctx.lineWidth = 2;
+      traceRoundedRect(ctx, bx, b.y - 102, 94, 46, 6);
+      ctx.fill();
+      ctx.stroke();
+      const pulse = 0.65 + 0.35 * Math.sin(simTime * 5 + bx * 0.01);
+      ctx.fillStyle = hexToRgba(theme.ledgeHighlight, pulse);
+      ctx.font = '700 11px "Barlow Condensed", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('PIXY DASH · 500', bx + 47, b.y - 82);
+      ctx.fillStyle = '#F97316';
+      ctx.fillRect(bx + 14, b.y - 68, 66 * pulse, 3.5);
+    } else if (plat.prop === 'garden') {
+      const gx = b.x + Math.min(80, plat.w * 0.25);
+      ctx.fillStyle = '#14532D';
+      ctx.fillRect(gx, b.y - 10, 88, 10);
+      ctx.fillStyle = '#22C55E';
+      for (let t = 0; t < 4; t++) {
+        ctx.beginPath();
+        ctx.arc(gx + 14 + t * 20, b.y - 16, 11, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     const drawH = plat.kind === 'building' ? Math.max(plat.h, 1800) : plat.h;
@@ -1173,6 +1521,9 @@ export function renderWorld(
     const drawY = b.y + jitterY;
 
     ctx.save();
+    if (plat.vanishPeriod) {
+      ctx.globalAlpha = fallAlpha * vanish.alpha;
+    }
     if (isFalling) {
       const cx = drawX + plat.w * 0.5;
       const cy = drawY + drawH * 0.5;
@@ -1456,9 +1807,28 @@ export function renderWorld(
     ctx.restore();
 
     traceRoundedRect(ctx, drawX, drawY, plat.w, drawH, rTop, rTop, rBottom, rBottom);
-    ctx.strokeStyle = collapseProg > 0.55 && plat.kind === 'bridge' ? '#EF4444' : theme.buildingStroke;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle =
+      plat.vanishPeriod && !vanish.solid
+        ? '#38BDF8'
+        : plat.vanishPeriod && vanish.warning
+        ? '#FBBF24'
+        : collapseProg > 0.55 && plat.kind === 'bridge'
+        ? '#EF4444'
+        : theme.buildingStroke;
+    ctx.lineWidth = plat.vanishPeriod ? 2.4 : 2;
+    if (plat.vanishPeriod && !vanish.solid) ctx.setLineDash([6, 6]);
     ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Precision Bullseye Landing Pad indicator
+    if (plat.precisionPad && !isFalling) {
+      const padX = drawX + plat.w * 0.5;
+      const padW = Math.min(72, plat.w * 0.65);
+      ctx.fillStyle = 'rgba(34, 211, 238, 0.25)';
+      ctx.fillRect(padX - padW * 0.5, drawY - 2, padW, 5);
+      ctx.fillStyle = '#38BDF8';
+      ctx.fillRect(padX - padW * 0.22, drawY - 3, padW * 0.44, 6);
+    }
 
     // High-Place Elevated Beacon & Gold Crown Trim (tracks 5-High-Place Level-Up Streak)
     const isHighPlat =
@@ -1471,7 +1841,7 @@ export function renderWorld(
       ctx.fillRect(drawX + 6, drawY, Math.max(0, plat.w - 12), 4);
 
       const bx = drawX + Math.min(34, plat.w * 0.35);
-      const bob = Math.sin(world.simTime * 4.5 + plat.x * 0.02) * 3;
+      const bob = Math.sin(simTime * 4.5 + plat.x * 0.02) * 3;
       const by = drawY - 18 + bob;
       ctx.fillStyle = passed ? 'rgba(16, 185, 129, 0.28)' : 'rgba(251, 191, 36, 0.28)';
       ctx.beginPath();
@@ -1491,6 +1861,85 @@ export function renderWorld(
       ctx.stroke();
     }
 
+    ctx.restore();
+  }
+
+  // Rotating Turbine Obstacles
+  for (const ro of world.rotatingObstacles) {
+    if (ro.x + ro.radius < renderCamX - 90 || ro.x - ro.radius > renderCamX + scaledViewW + 90) continue;
+    ctx.save();
+    ctx.translate(ro.x, ro.y);
+    const angle = simTime * ro.speed + ro.phase;
+    for (let arm = 0; arm < ro.armCount; arm++) {
+      const a = angle + (arm * Math.PI * 2) / ro.armCount;
+      const tipX = Math.cos(a) * ro.radius;
+      const tipY = Math.sin(a) * ro.radius;
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.36)';
+      ctx.lineWidth = ro.thickness + 6;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#F87171';
+      ctx.lineWidth = ro.thickness * 0.65;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#0F172A';
+    ctx.strokeStyle = '#FCA5A5';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Timed Security Laser Gates
+  for (const tg of world.timedGates) {
+    if (tg.x + tg.w < renderCamX - 90 || tg.x > renderCamX + scaledViewW + 90) continue;
+    const gateState = isTimedGateOpen(tg, simTime);
+    ctx.save();
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(tg.x - 3, tg.y - 8, tg.w + 6, 8);
+    ctx.fillRect(tg.x - 3, tg.y + tg.h, tg.w + 6, 8);
+    if (!gateState.open) {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.25)';
+      ctx.fillRect(tg.x - 4, tg.y, tg.w + 8, tg.h);
+      ctx.fillStyle = '#EF4444';
+      ctx.fillRect(tg.x + tg.w * 0.25, tg.y, tg.w * 0.5, tg.h);
+    } else {
+      ctx.strokeStyle = gateState.warning ? '#FBBF24' : '#34D399';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.strokeRect(tg.x, tg.y, tg.w, tg.h);
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+
+  // Secret Discovery Portals
+  for (const sd of world.secretDiscoveries) {
+    if (sd.x + sd.w < renderCamX - 90 || sd.x > renderCamX + scaledViewW + 90) continue;
+    const found = world.secretsFoundInRun.includes(sd.id);
+    const sx = sd.x + sd.w * 0.5;
+    const sy = sd.y + sd.h * 0.5;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(simTime * 1.8);
+    ctx.strokeStyle = found ? '#10B981' : '#34D399';
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.arc(0, 0, 20, 0, Math.PI * 1.5);
+    ctx.stroke();
+    ctx.fillStyle = found ? 'rgba(16, 185, 129, 0.25)' : 'rgba(52, 211, 153, 0.45)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 11, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   }
 
@@ -1907,34 +2356,35 @@ export function renderWorld(
     ctx.restore();
   }
 
-  // Shards with Ambient Halo
+  // Shards & Rare Tokens with Ambient Halo
   for (const sh of world.shards) {
     if (sh.collected) continue;
     if (sh.x < renderCamX - 40 || sh.x > renderCamX + scaledViewW + 40) continue;
-    const bob = Math.sin(world.simTime * 4.5 + sh.x * 0.02) * 5;
+    const bob = Math.sin(simTime * 4.5 + sh.x * 0.02) * 5;
     ctx.save();
     ctx.translate(sh.x, sh.y + bob);
 
-    ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
+    ctx.fillStyle = sh.isRareToken ? 'rgba(56, 189, 248, 0.28)' : 'rgba(245, 158, 11, 0.2)';
     ctx.beginPath();
-    ctx.arc(0, 0, 15 + Math.sin(world.simTime * 5 + sh.x) * 2, 0, Math.PI * 2);
+    ctx.arc(0, 0, (sh.isRareToken ? 18 : 15) + Math.sin(simTime * 5 + sh.x) * 2, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.rotate(Math.sin(world.simTime * 2.5 + sh.x) * 0.15);
-    ctx.fillStyle = '#F59E0B';
+    ctx.rotate(Math.sin(simTime * 2.5 + sh.x) * 0.15);
+    ctx.fillStyle = sh.isRareToken ? '#38BDF8' : '#F59E0B';
+    const scaleToken = sh.isRareToken ? 1.25 : 1;
     ctx.beginPath();
-    ctx.moveTo(0, -11);
-    ctx.lineTo(8, 0);
-    ctx.lineTo(0, 11);
-    ctx.lineTo(-8, 0);
+    ctx.moveTo(0, -11 * scaleToken);
+    ctx.lineTo(8 * scaleToken, 0);
+    ctx.lineTo(0, 11 * scaleToken);
+    ctx.lineTo(-8 * scaleToken, 0);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#FEF3C7';
+    ctx.fillStyle = sh.isRareToken ? '#E0F2FE' : '#FEF3C7';
     ctx.beginPath();
-    ctx.moveTo(0, -6);
-    ctx.lineTo(3.5, 0);
-    ctx.lineTo(0, 6);
-    ctx.lineTo(-3.5, 0);
+    ctx.moveTo(0, -6 * scaleToken);
+    ctx.lineTo(3.5 * scaleToken, 0);
+    ctx.lineTo(0, 6 * scaleToken);
+    ctx.lineTo(-3.5 * scaleToken, 0);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -2133,34 +2583,131 @@ export function renderWorld(
     drawFlyingMysteryChaser(ctx, ch.x, ch.y, world.simTime, ch.variant, chSurging, false, 1);
   }
 
+  // Ghost Racers (Personal Best / Leaderboard / Rival Ghosts)
+  for (const ghost of world.ghosts) {
+    if (!ghost.frames || ghost.frames.length === 0) continue;
+    const t = override?.frameOverride ? override.frameOverride.t : world.elapsedTime;
+    let frame = ghost.frames[ghost.frames.length - 1];
+    for (let i = 0; i < ghost.frames.length; i++) {
+      if (ghost.frames[i].t >= t) {
+        frame = ghost.frames[i];
+        break;
+      }
+    }
+    if (frame.x < renderCamX - 90 || frame.x > renderCamX + scaledViewW + 90) continue;
+    drawArticulatedRunner(
+      ctx,
+      frame.x,
+      frame.y,
+      26,
+      frame.h,
+      frame.facing,
+      frame.action,
+      t,
+      1,
+      1,
+      true,
+      0.42,
+      { body: '#38BDF8', outline: '#E0F2FE', accent: '#7DD3FC' },
+      ghost.appearance
+    );
+    ctx.save();
+    ctx.font = '700 10px "Barlow Condensed", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#BAE6FD';
+    ctx.fillText(`[GHOST] ${ghost.name}`, frame.x + 13, frame.y - 12);
+    ctx.restore();
+  }
+
+  // Named NPC Rivals (Clearly Badged [NPC])
+  for (const rival of world.rivals) {
+    if (rival.x < renderCamX - 90 || rival.x > renderCamX + scaledViewW + 90) continue;
+    drawArticulatedRunner(
+      ctx,
+      rival.x,
+      rival.y,
+      rival.w,
+      rival.h,
+      1,
+      rival.action,
+      rival.animTime,
+      1,
+      1,
+      false,
+      0.92,
+      undefined,
+      rival.appearance
+    );
+    ctx.save();
+    ctx.font = '700 11px "Barlow Condensed", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#0F172A';
+    ctx.fillText(`[NPC] ${rival.name}`, rival.x + rival.w * 0.5 + 1, rival.y - 11);
+    ctx.fillStyle = '#FDBA74';
+    ctx.fillText(`[NPC] ${rival.name}`, rival.x + rival.w * 0.5, rival.y - 12);
+    ctx.restore();
+  }
+
+  // Real Online Multiplayer Players (Clearly Badged [LIVE])
+  for (const rp of world.remotePlayers) {
+    if (rp.x < renderCamX - 90 || rp.x > renderCamX + scaledViewW + 90) continue;
+    drawArticulatedRunner(
+      ctx,
+      rp.x,
+      rp.y,
+      26,
+      rp.h,
+      rp.facing,
+      rp.action,
+      simTime,
+      1,
+      1,
+      false,
+      0.95,
+      undefined,
+      rp.appearance
+    );
+    ctx.save();
+    ctx.font = '700 11px "Barlow Condensed", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#0F172A';
+    ctx.fillText(`[LIVE] ${rp.name}`, rp.x + 14, rp.y - 11);
+    ctx.fillStyle = '#34D399';
+    ctx.fillText(`[LIVE] ${rp.name}`, rp.x + 13, rp.y - 12);
+    ctx.restore();
+  }
+
   // Little player cloning animations (light kinetic echo silhouettes)
   const cloneTint =
     world.powerUpTimers.surge > 0
       ? { body: '#06B6D4', outline: '#A5F3FC', accent: '#67E8F9' }
       : { body: '#EA580C', outline: '#FEF08A', accent: '#FDBA74' };
-  for (const img of world.player.afterimages) {
-    const miniScale = 0.9 + img.alpha * 0.14;
-    drawArticulatedRunner(
-      ctx,
-      img.x,
-      img.y,
-      img.w,
-      img.h,
-      img.facing,
-      img.action,
-      img.animTime,
-      miniScale,
-      miniScale,
-      true,
-      Math.max(0, img.alpha * 0.72),
-      cloneTint
-    );
+  if (!override?.frameOverride) {
+    for (const img of world.player.afterimages) {
+      const miniScale = 0.9 + img.alpha * 0.14;
+      drawArticulatedRunner(
+        ctx,
+        img.x,
+        img.y,
+        img.w,
+        img.h,
+        img.facing,
+        img.action,
+        img.animTime,
+        miniScale,
+        miniScale,
+        true,
+        Math.max(0, img.alpha * 0.72),
+        cloneTint,
+        world.customization
+      );
+    }
   }
 
   // Dual-pass Kinetic Scarf Trail (Ignites with Pixy Flame at 3x+ Combo)
   const scarf = world.player.scarf;
   const comboFlame = world.comboCount >= 4;
-  if (scarf.length > 1) {
+  if (!override?.frameOverride && scarf.length > 1) {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -2169,7 +2716,7 @@ export function renderWorld(
         ? 'rgba(6, 182, 212, 0.45)'
         : comboFlame
         ? 'rgba(251, 191, 36, 0.58)'
-        : 'rgba(249, 115, 22, 0.35)';
+        : `${world.customization.scarfColor}59`;
     ctx.lineWidth = comboFlame ? 13 : 10;
     ctx.beginPath();
     ctx.moveTo(scarf[0].x, scarf[0].y);
@@ -2179,7 +2726,7 @@ export function renderWorld(
     ctx.stroke();
 
     ctx.strokeStyle =
-      world.powerUpTimers.surge > 0 ? '#22D3EE' : comboFlame ? '#FEF08A' : '#F97316';
+      world.powerUpTimers.surge > 0 ? '#22D3EE' : comboFlame ? '#FEF08A' : world.customization.scarfColor;
     ctx.lineWidth = comboFlame ? 5.6 : 4.8;
     ctx.beginPath();
     ctx.moveTo(scarf[0].x, scarf[0].y);
@@ -2189,21 +2736,24 @@ export function renderWorld(
     ctx.stroke();
   }
 
-  // Runner
+  // Main Runner (or Replay Frame Override)
   const p = world.player;
+  const rf = override?.frameOverride;
   drawArticulatedRunner(
     ctx,
-    p.x,
-    p.y,
+    rf ? rf.x : p.x,
+    rf ? rf.y : p.y,
     p.w,
-    p.h,
-    p.facing,
-    p.action,
-    p.animTime,
-    p.squashX,
-    p.squashY,
+    rf ? rf.h : p.h,
+    rf ? rf.facing : p.facing,
+    rf ? rf.action : p.action,
+    rf ? rf.t : p.animTime,
+    rf ? 1 : p.squashX,
+    rf ? 1 : p.squashY,
     false,
-    1
+    1,
+    undefined,
+    world.customization
   );
 
   // Active Power-Up Energy Shields & Overdrive Rings on Runner
@@ -2442,12 +2992,12 @@ export function renderWorld(
 
   ctx.restore();
 
-  // 5b. World Weather Layer (Rain Streaks + Rooftop Splashes, Wind Embers, or Atmospheric Motes)
+  // 5b. World Weather Layer (Rain Streaks + Heavy Rain + Rooftop Splashes, Wind Embers, or Atmospheric Motes)
   if (weather === 'rain' || weather === 'storm') {
-    const dropCount = weather === 'storm' ? RAIN_DROPS.length : Math.floor(RAIN_DROPS.length * 0.65);
+    const dropCount = isHeavyRain || weather === 'storm' ? RAIN_DROPS.length : Math.floor(RAIN_DROPS.length * 0.65);
     ctx.save();
-    ctx.strokeStyle = weather === 'storm' ? 'rgba(186, 230, 253, 0.42)' : 'rgba(203, 213, 225, 0.32)';
-    ctx.lineWidth = 1.25;
+    ctx.strokeStyle = weather === 'storm' || isHeavyRain ? 'rgba(186, 230, 253, 0.48)' : 'rgba(203, 213, 225, 0.32)';
+    ctx.lineWidth = isHeavyRain ? 1.6 : 1.25;
     ctx.lineCap = 'round';
     ctx.beginPath();
     for (let i = 0; i < dropCount; i++) {

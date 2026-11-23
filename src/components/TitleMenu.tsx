@@ -3,6 +3,8 @@ import {
   Camera,
   ChevronLeft,
   ChevronRight,
+  Compass,
+  Ghost,
   Grid3X3,
   Infinity as InfinityIcon,
   Layers,
@@ -13,11 +15,17 @@ import {
   RotateCcw,
   Settings,
   Smartphone,
+  Sparkles,
+  Trophy,
+  User,
+  Users,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
+import { PlayerProfile, xpForNextLevel } from '../engine/progression';
+import { getChallengeLabel, getChallengeTagForLevel, getDistrictForLevel, ROOFTOP_DISTRICTS } from '../levels/districts';
 import { BestRecord, CameraZoom, SavedRunSnapshot } from '../types/game';
 import { formatRunTime } from './GameHUD';
 
@@ -36,6 +44,8 @@ interface TitleMenuProps {
   muted: boolean;
   vibrationEnabled: boolean;
   isFullscreen: boolean;
+  profile: PlayerProfile;
+  onlineRoomCode?: string | null;
   onChangePlayMode: (mode: PlayMode) => void;
   onSelectLevel: (level: number) => void;
   onChangeCameraZoom: (zoom: CameraZoom) => void;
@@ -46,12 +56,14 @@ interface TitleMenuProps {
   onToggleMute: () => void;
   onToggleVibration: () => void;
   onToggleFullscreen: () => void;
+  onOpenStudio: () => void;
+  onOpenMissions: () => void;
+  onOpenLeaderboards: () => void;
+  onOpenMultiplayer: () => void;
+  onToggleRivals: () => void;
+  onToggleGhost: () => void;
+  onToggleSlowMo: () => void;
 }
-
-const LEVEL_BANDS = Array.from({ length: 10 }, (_, idx) => ({
-  start: idx * 50 + 1,
-  end: (idx + 1) * 50,
-}));
 
 export function TitleMenu({
   playMode,
@@ -66,6 +78,8 @@ export function TitleMenu({
   muted,
   vibrationEnabled,
   isFullscreen,
+  profile,
+  onlineRoomCode,
   onChangePlayMode,
   onSelectLevel,
   onChangeCameraZoom,
@@ -76,6 +90,13 @@ export function TitleMenu({
   onToggleMute,
   onToggleVibration,
   onToggleFullscreen,
+  onOpenStudio,
+  onOpenMissions,
+  onOpenLeaderboards,
+  onOpenMultiplayer,
+  onToggleRivals,
+  onToggleGhost,
+  onToggleSlowMo,
 }: TitleMenuProps) {
   const hasSavedSpot = Boolean(savedRun && savedRun.elapsedTime > 0.2);
   const savedIsEndless = Boolean(savedRun && (savedRun.isEndless || savedRun.courseId === 'endless-skyline'));
@@ -85,7 +106,13 @@ export function TitleMenu({
     Math.min(9, Math.max(0, Math.floor((selectedLevel - 1) / 50)))
   );
 
-  const activeBand = LEVEL_BANDS[pickerBandIndex] ?? LEVEL_BANDS[0];
+  const activeDistrictBand = ROOFTOP_DISTRICTS[pickerBandIndex] ?? ROOFTOP_DISTRICTS[0];
+  const selectedDistrict = getDistrictForLevel(selectedLevel);
+  const selectedChallenge = getChallengeTagForLevel(selectedLevel);
+  const hasClaimableMission =
+    !profile.dailyRewardClaimedToday ||
+    profile.missions.some((m) => !m.claimed && m.progress >= m.target);
+  const xpNeeded = xpForNextLevel(profile.playerLevel);
 
   return (
     <div
@@ -95,15 +122,21 @@ export function TitleMenu({
     >
       {/* Top Bar */}
       <div className="animate-menu-rise flex flex-wrap items-center justify-between gap-2.5 shrink-0">
-        <span
-          className={`font-display font-bold tracking-wide text-slate-50 whitespace-nowrap ${
-            compactLayout ? 'text-xl' : 'text-2xl'
-          }`}
-        >
-          Pixy Dash
-        </span>
+        <div className="flex items-center gap-3">
+          <span
+            className={`font-display font-bold tracking-wide text-slate-50 whitespace-nowrap ${
+              compactLayout ? 'text-xl' : 'text-2xl'
+            }`}
+          >
+            Pixy Dash
+          </span>
+          <span className="hidden sm:inline text-xs font-mono-tabular text-slate-300">
+            Lvl {profile.playerLevel} ({profile.xp}/{xpNeeded} XP) ·{' '}
+            <span className="font-bold text-amber-300">{profile.coins.toLocaleString()} Coins</span>
+          </span>
+        </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <div className="text-xs sm:text-sm font-mono-tabular text-slate-300 whitespace-nowrap">
             Unlocked <span className="font-bold text-emerald-400">{highestUnlockedLevel}</span>
             <span className="text-slate-500"> / {maxLevel}</span>
@@ -143,7 +176,7 @@ export function TitleMenu({
           compactLayout ? 'mt-2' : 'mt-6'
         }`}
       >
-        <div className={compactLayout ? 'mb-2.5' : 'mb-5'}>
+        <div className={compactLayout ? 'mb-2' : 'mb-4'}>
           <h1
             className={`font-display font-bold tracking-tight text-slate-50 text-balance ${
               compactLayout ? 'text-3xl leading-none' : 'text-5xl sm:text-6xl'
@@ -152,8 +185,54 @@ export function TitleMenu({
             Pixy Dash.
           </h1>
           <p className={`text-slate-300 ${compactLayout ? 'mt-1 text-xs line-clamp-2' : 'mt-2 text-sm sm:text-base'}`}>
-            500 giant rooftop parkour stages above a sea of boiling lava. Ride thermal updrafts, clear 5 high places without falling to level up on the spot, and outrun the flying phantom.
+            500 giant rooftops across 10 districts above boiling lava. Wall-run, sprint, race NPC rivals or live online lobbies, and master Rooftop 500.
           </p>
+
+          {/* Feature Hub Buttons */}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenStudio}
+              className="flex h-10 items-center gap-2 rounded-lg border border-slate-700/90 bg-slate-900/85 px-3.5 text-xs font-semibold text-slate-100 backdrop-blur-md transition-colors hover:border-orange-500/70 hover:bg-slate-800 whitespace-nowrap"
+            >
+              <User className="h-4 w-4 text-orange-400" />
+              <span>Runner Studio &amp; Skills</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenMultiplayer}
+              className={`flex h-10 items-center gap-2 rounded-lg border px-3.5 text-xs font-semibold backdrop-blur-md transition-colors whitespace-nowrap ${
+                onlineRoomCode
+                  ? 'border-emerald-500/80 bg-emerald-950/70 text-emerald-200'
+                  : 'border-slate-700/90 bg-slate-900/85 text-slate-100 hover:border-emerald-500/60 hover:bg-slate-800'
+              }`}
+            >
+              <Users className="h-4 w-4 text-emerald-400" />
+              <span>{onlineRoomCode ? `Room ${onlineRoomCode}` : 'Online Multiplayer'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenMissions}
+              className="relative flex h-10 items-center gap-2 rounded-lg border border-slate-700/90 bg-slate-900/85 px-3.5 text-xs font-semibold text-slate-100 backdrop-blur-md transition-colors hover:border-cyan-500/60 hover:bg-slate-800 whitespace-nowrap"
+            >
+              <Compass className="h-4 w-4 text-cyan-400" />
+              <span>Missions &amp; Secrets</span>
+              {hasClaimableMission && (
+                <span className="h-2 w-2 rounded-xs bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenLeaderboards}
+              className="flex h-10 items-center gap-2 rounded-lg border border-slate-700/90 bg-slate-900/85 px-3.5 text-xs font-semibold text-slate-100 backdrop-blur-md transition-colors hover:border-amber-500/60 hover:bg-slate-800 whitespace-nowrap"
+            >
+              <Trophy className="h-4 w-4 text-amber-400" />
+              <span>Leaderboards &amp; Tournaments</span>
+            </button>
+          </div>
         </div>
 
         <div
@@ -192,9 +271,18 @@ export function TitleMenu({
               </div>
 
               <div>
-                <span className={`font-display font-bold text-slate-50 ${compactLayout ? 'text-lg' : 'text-xl'}`}>
-                  {playMode === 'endless' ? 'Endless Pursuit' : `Level ${selectedLevel} / ${maxLevel}`}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`font-display font-bold text-slate-50 ${compactLayout ? 'text-lg' : 'text-xl'}`}>
+                    {playMode === 'endless'
+                      ? 'Endless Pursuit'
+                      : `Stage ${selectedLevel} · ${selectedDistrict.name}`}
+                  </span>
+                  {playMode === 'levels' && selectedChallenge !== 'standard' && (
+                    <span className="text-xs font-semibold text-amber-300">
+                      [{getChallengeLabel(selectedChallenge)}]
+                    </span>
+                  )}
+                </div>
                 {hasSavedSpot && savedRun ? (
                   <p className="text-xs font-medium text-emerald-400">
                     Saved {savedIsEndless ? 'Endless Run' : `Level ${savedRun.levelNumber ?? 1}`} at {savedRun.distanceMeters} m · {formatRunTime(savedRun.elapsedTime)}
@@ -207,7 +295,7 @@ export function TitleMenu({
                   <p className="text-xs text-slate-400">
                     {playMode === 'endless'
                       ? 'Infinite procedural rooftops — survive as far as you can.'
-                      : 'Reach the finish gate to unlock the next level.'}
+                      : selectedDistrict.signatureFeature}
                   </p>
                 )}
               </div>
@@ -226,7 +314,7 @@ export function TitleMenu({
                     <ChevronLeft className="h-4 w-4" />
                   </button>
                   <span className="min-w-[82px] text-center text-xs font-mono-tabular font-bold text-slate-100">
-                    Level {selectedLevel}
+                    Stage {selectedLevel}
                   </span>
                   <button
                     type="button"
@@ -248,7 +336,7 @@ export function TitleMenu({
                   className="flex h-10 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/90 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-orange-500 whitespace-nowrap"
                 >
                   <Grid3X3 className="h-3.5 w-3.5 text-orange-400" />
-                  <span>Browse 1–{maxLevel}</span>
+                  <span>Districts 1–{maxLevel}</span>
                 </button>
               </div>
             )}
@@ -267,6 +355,10 @@ export function TitleMenu({
                   <span>High Score: {endlessRecord.bestScore.toLocaleString()}</span>
                 </>
               ) : null}
+              <span aria-hidden="true">·</span>
+              <span className="text-orange-300">
+                Rivals: {profile.rivalsEnabled ? 'On' : 'Off'} · Ghost: {profile.ghostEnabled ? 'On' : 'Off'}
+              </span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -292,7 +384,7 @@ export function TitleMenu({
                   }`}
                 >
                   <RotateCcw className="h-4 w-4" />
-                  <span>Continue {savedIsEndless ? 'Endless' : `Level ${savedRun.levelNumber ?? 1}`}</span>
+                  <span>Continue {savedIsEndless ? 'Endless' : `Stage ${savedRun.levelNumber ?? 1}`}</span>
                 </button>
               )}
 
@@ -315,7 +407,7 @@ export function TitleMenu({
                     ? 'Start Warm-Up'
                     : playMode === 'endless'
                     ? 'Start Endless Run'
-                    : `Play Level ${selectedLevel}`}
+                    : `Play Stage ${selectedLevel}`}
                 </span>
               </button>
             </div>
@@ -323,21 +415,21 @@ export function TitleMenu({
         </div>
       </div>
 
-      {/* Levels 1-500 Browser Modal */}
+      {/* Levels 1-500 District Browser Modal */}
       {showLevelPicker && (
         <div className="animate-backdrop-fade fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm">
           <div
-            className={`animate-modal-pop flex max-h-full w-full max-w-2xl flex-col rounded-xl border border-slate-800 bg-slate-900 shadow-2xl ${
+            className={`animate-modal-pop flex max-h-full w-full max-w-3xl flex-col rounded-xl border border-slate-800 bg-slate-900 shadow-2xl ${
               compactLayout ? 'p-3.5' : 'p-5'
             }`}
           >
             <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3 shrink-0">
               <div>
                 <h2 className={`font-display font-bold text-slate-50 ${compactLayout ? 'text-xl' : 'text-2xl'}`}>
-                  Levels 1–{maxLevel}
+                  10 Districts · Stages 1–{maxLevel}
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Unlocked up to Level {highestUnlockedLevel} · Select any unlocked stage
+                  {activeDistrictBand.name} ({activeDistrictBand.rangeStart}–{activeDistrictBand.rangeEnd}) · {activeDistrictBand.subtitle}
                 </p>
               </div>
               <button
@@ -350,17 +442,17 @@ export function TitleMenu({
               </button>
             </div>
 
-            {/* 50-Level Range Tabs */}
+            {/* 10 District Tabs */}
             <div className="mt-3 flex flex-wrap gap-1.5 shrink-0">
-              {LEVEL_BANDS.map((band, idx) => {
+              {ROOFTOP_DISTRICTS.map((dist, idx) => {
                 const active = idx === pickerBandIndex;
-                const bandUnlocked = highestUnlockedLevel >= band.start;
+                const bandUnlocked = highestUnlockedLevel >= dist.rangeStart;
                 return (
                   <button
-                    key={band.start}
+                    key={dist.id}
                     type="button"
                     onClick={() => setPickerBandIndex(idx)}
-                    className={`rounded-md px-2.5 py-1.5 text-xs font-mono-tabular font-semibold transition-colors whitespace-nowrap ${
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
                       active
                         ? 'bg-orange-600 text-white'
                         : bandUnlocked
@@ -368,18 +460,19 @@ export function TitleMenu({
                         : 'bg-slate-950/60 text-slate-500 hover:bg-slate-800/60'
                     }`}
                   >
-                    {band.start}–{band.end}
+                    {dist.rangeStart}–{dist.rangeEnd} · {dist.name.split(' ')[0]}
                   </button>
                 );
               })}
             </div>
 
-            {/* Grid of 50 levels in selected range */}
+            {/* Grid of 50 levels in selected district */}
             <div className="mt-3 grid grid-cols-5 sm:grid-cols-10 gap-1.5 overflow-y-auto pr-1 py-1">
               {Array.from({ length: 50 }, (_, offset) => {
-                const lvl = activeBand.start + offset;
+                const lvl = activeDistrictBand.rangeStart + offset;
                 const unlocked = lvl <= highestUnlockedLevel;
                 const isSelected = lvl === selectedLevel;
+                const completed = profile.completedLevels.includes(lvl);
                 return (
                   <button
                     key={lvl}
@@ -392,6 +485,8 @@ export function TitleMenu({
                     className={`flex h-9 items-center justify-center gap-1 rounded-md border text-xs font-mono-tabular font-bold transition-colors focus-visible:outline-2 focus-visible:outline-orange-500 ${
                       isSelected
                         ? 'border-orange-400 bg-orange-600 text-white'
+                        : completed
+                        ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50'
                         : unlocked
                         ? 'border-slate-700 bg-slate-800/80 text-slate-100 hover:border-orange-500/60 hover:bg-slate-700'
                         : 'border-slate-800/70 bg-slate-950/60 text-slate-600 cursor-not-allowed'
@@ -433,7 +528,7 @@ export function TitleMenu({
               </button>
             </div>
 
-            <div className={`flex flex-col ${compactLayout ? 'mt-3 gap-2.5' : 'mt-5 gap-3.5'}`}>
+            <div className={`flex flex-col ${compactLayout ? 'mt-3 gap-2.5' : 'mt-5 gap-3'}`}>
               <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/50 px-3.5 py-2">
                 <div className="flex items-center gap-2.5 text-sm font-medium text-slate-200">
                   {muted ? <VolumeX className="h-4 w-4 text-slate-400" /> : <Volume2 className="h-4 w-4 text-orange-400" />}
@@ -444,7 +539,7 @@ export function TitleMenu({
                   role="switch"
                   aria-checked={!muted}
                   onClick={onToggleMute}
-                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-orange-500 whitespace-nowrap ${
+                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
                     !muted ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -462,11 +557,65 @@ export function TitleMenu({
                   role="switch"
                   aria-checked={vibrationEnabled}
                   onClick={onToggleVibration}
-                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-orange-500 whitespace-nowrap ${
+                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
                     vibrationEnabled ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   {vibrationEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/50 px-3.5 py-2">
+                <div className="flex items-center gap-2.5 text-sm font-medium text-slate-200">
+                  <Users className={`h-4 w-4 ${profile.rivalsEnabled ? 'text-orange-400' : 'text-slate-400'}`} />
+                  <span>NPC Rivals</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={profile.rivalsEnabled}
+                  onClick={onToggleRivals}
+                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    profile.rivalsEnabled ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {profile.rivalsEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/50 px-3.5 py-2">
+                <div className="flex items-center gap-2.5 text-sm font-medium text-slate-200">
+                  <Ghost className={`h-4 w-4 ${profile.ghostEnabled ? 'text-cyan-400' : 'text-slate-400'}`} />
+                  <span>Best Ghost</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={profile.ghostEnabled}
+                  onClick={onToggleGhost}
+                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    profile.ghostEnabled ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {profile.ghostEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/50 px-3.5 py-2">
+                <div className="flex items-center gap-2.5 text-sm font-medium text-slate-200">
+                  <Sparkles className={`h-4 w-4 ${profile.cinematicSlowMoEnabled ? 'text-amber-400' : 'text-slate-400'}`} />
+                  <span>Slow-Mo FX</span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={profile.cinematicSlowMoEnabled}
+                  onClick={onToggleSlowMo}
+                  className={`flex h-9 min-w-[74px] items-center justify-center rounded-md px-3 text-xs font-semibold transition-colors whitespace-nowrap ${
+                    profile.cinematicSlowMoEnabled ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {profile.cinematicSlowMoEnabled ? 'On' : 'Off'}
                 </button>
               </div>
 
@@ -484,7 +633,7 @@ export function TitleMenu({
                         type="button"
                         onClick={() => onChangeCameraZoom(zoom)}
                         aria-pressed={active}
-                        className={`flex h-8 min-w-[38px] items-center justify-center rounded px-2 text-xs font-mono-tabular font-bold transition-colors focus-visible:outline-2 focus-visible:outline-orange-500 whitespace-nowrap ${
+                        className={`flex h-8 min-w-[38px] items-center justify-center rounded px-2 text-xs font-mono-tabular font-bold transition-colors whitespace-nowrap ${
                           active ? 'bg-orange-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'
                         }`}
                       >

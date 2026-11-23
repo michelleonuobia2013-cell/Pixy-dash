@@ -1,4 +1,5 @@
-import { ArrowRight, List, RotateCcw } from 'lucide-react';
+import { ArrowRight, Camera, List, RotateCcw } from 'lucide-react';
+import { getChallengeLabel } from '../levels/districts';
 import { RunSummary } from '../types/game';
 import { formatRunTime } from './GameHUD';
 
@@ -6,6 +7,8 @@ interface RunSummaryModalProps {
   summary: RunSummary;
   hasNextLevel: boolean;
   compactLayout: boolean;
+  leaderboardSubmitted?: boolean;
+  onWatchReplay: () => void;
   onNextLevel: () => void;
   onPlayAgain: () => void;
   onMainMenu: () => void;
@@ -15,6 +18,8 @@ export function RunSummaryModal({
   summary,
   hasNextLevel,
   compactLayout,
+  leaderboardSubmitted,
+  onWatchReplay,
   onNextLevel,
   onPlayAgain,
   onMainMenu,
@@ -44,12 +49,14 @@ export function RunSummaryModal({
                   ? 'Fell into Boiling Lava'
                   : 'Endless Run Ended'
                 : summary.cleared
-                ? `Level ${summary.levelNumber} Cleared`
+                ? summary.levelNumber === 500
+                  ? 'Rooftop 500 Conquered!'
+                  : `Stage ${summary.levelNumber} Cleared`
                 : summary.caughtByChaser
                 ? 'Caught by Pursuer'
                 : summary.fellInLava
                 ? 'Fell into Boiling Lava'
-                : `Level ${summary.levelNumber} Failed`}
+                : `Stage ${summary.levelNumber} Failed`}
             </h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-400">
               <span>
@@ -66,6 +73,12 @@ export function RunSummaryModal({
                 <>
                   <span aria-hidden="true">·</span>
                   <span className="font-semibold text-orange-400">New Best Distance</span>
+                </>
+              )}
+              {leaderboardSubmitted && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-semibold text-cyan-300">Uploaded to Global Leaderboard</span>
                 </>
               )}
             </div>
@@ -89,84 +102,102 @@ export function RunSummaryModal({
           )}
         </div>
 
-        <div className={`grid grid-cols-2 ${compactLayout ? 'mt-3 gap-2.5' : 'mt-5 gap-4'}`}>
-          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3.5'}`}>
-            <div className="text-xs text-slate-400">{summary.isEndless ? 'Rank Reached' : 'Level'}</div>
-            <div
-              className={`mt-0.5 font-mono-tabular font-bold ${
-                summary.isEndless
-                  ? 'text-amber-300'
-                  : summary.cleared
-                  ? 'text-emerald-400'
-                  : 'text-slate-100'
-              } ${compactLayout ? 'text-xl' : 'text-2xl'}`}
-            >
-              {summary.isEndless ? `Lvl ${summary.levelNumber}` : `${summary.levelNumber} / 500`}
+        <div className={`grid grid-cols-2 ${compactLayout ? 'mt-3 gap-2' : 'mt-5 gap-3'}`}>
+          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3'}`}>
+            <div className="text-xs text-slate-400">Coins &amp; XP Earned</div>
+            <div className="mt-0.5 font-mono-tabular text-lg font-bold text-amber-300">
+              +{summary.coinsEarned}c <span className="text-sm text-cyan-300">· +{summary.xpEarned} XP</span>
             </div>
           </div>
 
-          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3.5'}`}>
-            <div className="text-xs text-slate-400">High Places · Level Ups</div>
-            <div className={`mt-0.5 font-mono-tabular font-bold text-amber-400 ${compactLayout ? 'text-xl' : 'text-2xl'}`}>
-              {summary.highPlacesPassed} <span className="text-sm font-semibold text-emerald-400">· +{summary.levelUpsEarned}</span>
+          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3'}`}>
+            <div className="text-xs text-slate-400">
+              {summary.raceRank ? 'Race Podium' : 'High Places · Level Ups'}
+            </div>
+            <div className="mt-0.5 font-mono-tabular text-lg font-bold text-emerald-400">
+              {summary.raceRank
+                ? `#${summary.raceRank} / ${summary.totalRacers}`
+                : `${summary.highPlacesPassed} · +${summary.levelUpsEarned}`}
             </div>
           </div>
 
-          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3.5'}`}>
-            <div className="text-xs text-slate-400">Distance · KOs</div>
-            <div className={`mt-0.5 font-mono-tabular font-semibold text-slate-100 ${compactLayout ? 'text-base' : 'text-lg'}`}>
-              {summary.distanceMeters} m · {summary.takedownsCount}
+          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3'}`}>
+            <div className="text-xs text-slate-400">Distance · Max Leap</div>
+            <div className="mt-0.5 font-mono-tabular text-base font-semibold text-slate-100">
+              {summary.distanceMeters} m · {summary.longestJumpMeters.toFixed(1)} m
             </div>
           </div>
 
-          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3.5'}`}>
-            <div className="text-xs text-slate-400">Score</div>
-            <div className={`mt-0.5 font-mono-tabular font-semibold text-slate-100 ${compactLayout ? 'text-base' : 'text-lg'}`}>
-              {summary.score.toLocaleString()}
+          <div className={`rounded-lg border border-slate-800 bg-slate-950/50 ${compactLayout ? 'p-2.5' : 'p-3'}`}>
+            <div className="text-xs text-slate-400">Perfect Landings · KOs</div>
+            <div className="mt-0.5 font-mono-tabular text-base font-semibold text-slate-100">
+              {summary.perfectLandings} · {summary.takedownsCount}
             </div>
           </div>
         </div>
 
-        <div className={compactLayout ? 'mt-3.5 flex items-center gap-2.5' : 'mt-6 flex flex-col gap-2.5'}>
+        {(summary.challengeTag !== 'standard' || summary.secretsDiscovered.length > 0) && (
+          <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-300 flex flex-wrap justify-between gap-2">
+            {summary.challengeTag !== 'standard' && (
+              <span className={summary.challengeCompleted ? 'text-emerald-400 font-semibold' : 'text-slate-400'}>
+                {getChallengeLabel(summary.challengeTag)}: {summary.challengeCompleted ? 'Cleared' : 'Missed'}
+              </span>
+            )}
+            {summary.secretsDiscovered.length > 0 && (
+              <span className="text-emerald-300 font-semibold">
+                {summary.secretsDiscovered.length} Secret Discovered!
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className={compactLayout ? 'mt-3.5 grid grid-cols-2 gap-2' : 'mt-5 flex flex-col gap-2.5'}>
           {canAdvance ? (
             <>
               <button
                 type="button"
                 onClick={onNextLevel}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white transition-all duration-150 hover:bg-emerald-500 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-emerald-400 whitespace-nowrap"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white transition-all duration-150 hover:bg-emerald-500 active:scale-[0.98] whitespace-nowrap"
               >
-                <span>Next Level ({summary.levelNumber + 1})</span>
+                <span>Next Stage ({summary.levelNumber + 1})</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
 
               <button
                 type="button"
                 onClick={onPlayAgain}
-                className={`flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-4 font-medium text-slate-200 transition-colors hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-orange-500 whitespace-nowrap ${
-                  compactLayout ? 'h-11 w-full text-sm' : 'h-10 w-full text-xs'
-                }`}
+                className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-4 text-xs font-medium text-slate-200 hover:bg-slate-700 whitespace-nowrap"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                <span>Replay Level {summary.levelNumber}</span>
+                <span>Replay Stage {summary.levelNumber}</span>
               </button>
             </>
           ) : (
             <button
               type="button"
               onClick={onPlayAgain}
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 text-sm font-semibold text-white transition-all duration-150 hover:bg-orange-500 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-orange-400 whitespace-nowrap"
+              className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 text-sm font-semibold text-white transition-all duration-150 hover:bg-orange-500 active:scale-[0.98] whitespace-nowrap"
             >
               <RotateCcw className="h-4 w-4" />
-              <span>{summary.isEndless ? 'Retry Endless Run' : `Retry Level ${summary.levelNumber}`}</span>
+              <span>{summary.isEndless ? 'Retry Endless Run' : `Retry Stage ${summary.levelNumber}`}</span>
+            </button>
+          )}
+
+          {summary.replayFrames.length >= 2 && (
+            <button
+              type="button"
+              onClick={onWatchReplay}
+              className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-cyan-500/50 bg-cyan-950/40 px-4 text-xs font-semibold text-cyan-200 hover:bg-cyan-900/50 whitespace-nowrap"
+            >
+              <Camera className="h-3.5 w-3.5" />
+              <span>Replay &amp; Photo Mode</span>
             </button>
           )}
 
           <button
             type="button"
             onClick={onMainMenu}
-            className={`flex items-center justify-center gap-2 rounded-lg border border-slate-800 bg-slate-950/50 px-4 font-medium text-slate-300 transition-colors hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-orange-500 whitespace-nowrap ${
-              compactLayout ? 'h-11 w-full text-sm' : 'h-10 w-full text-xs'
-            }`}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-800 bg-slate-950/50 px-4 text-xs font-medium text-slate-300 hover:bg-slate-800 whitespace-nowrap"
           >
             <List className="h-3.5 w-3.5" />
             <span>Main Menu</span>

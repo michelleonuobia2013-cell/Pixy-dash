@@ -1,6 +1,7 @@
 import {
   AirBooster,
   BoostStrip,
+  Checkpoint,
   CourseDefinition,
   EnemyEntity,
   GlassWall,
@@ -9,10 +10,21 @@ import {
   Platform,
   PowerUpItem,
   PowerUpType,
+  RotatingObstacle,
+  SecretDiscovery,
   Shard,
   SpringPad,
   ThermalVent,
+  TimedGate,
+  WindZone,
 } from '../types/game';
+import { WORLD_BIOMES } from './biomes';
+import {
+  getChallengeLabel,
+  getChallengeTagForLevel,
+  getDistrictForLevel,
+  SECRET_CATALOG,
+} from './districts';
 
 export const MAX_LEVEL = 500;
 export const LAVA_SURFACE_Y = 700;
@@ -135,6 +147,9 @@ export interface EndlessChunkResult {
   airBoosters: AirBooster[];
   glassWalls: GlassWall[];
   thermalVents: ThermalVent[];
+  rotatingObstacles: RotatingObstacle[];
+  timedGates: TimedGate[];
+  windZones: WindZone[];
   hazards: Hazard[];
   shards: Shard[];
   powerUps: PowerUpItem[];
@@ -155,10 +170,20 @@ export function generateEndlessChunk(
   const airBoosters: AirBooster[] = [];
   const glassWalls: GlassWall[] = [];
   const thermalVents: ThermalVent[] = [];
+  const rotatingObstacles: RotatingObstacle[] = [];
+  const timedGates: TimedGate[] = [];
+  const windZones: WindZone[] = [];
   const hazards: Hazard[] = [];
   const shards: Shard[] = [];
   const powerUps: PowerUpItem[] = [];
   const enemies: EnemyEntity[] = [];
+
+  const maxPatternCount =
+    difficultyOverride === undefined
+      ? 16
+      : difficultyOverride >= 0.35
+      ? 16
+      : 14;
 
   const pattern =
     difficultyOverride === undefined && chunkIndex === 1
@@ -168,10 +193,10 @@ export function generateEndlessChunk(
       : difficultyOverride === undefined && chunkIndex === 3
       ? 12
       : difficultyOverride === undefined && chunkIndex === 4
-      ? 10
-      : Math.floor(rng() * 13);
+      ? 13
+      : Math.floor(rng() * maxPatternCount);
   const clampY = (y: number) => Math.max(175, Math.min(495, y));
-  const props: Platform['prop'][] = ['antenna', 'hvac', 'watertower', undefined];
+  const props: Platform['prop'][] = ['antenna', 'hvac', 'watertower', 'billboard', undefined];
   const pickProp = () => props[Math.floor(rng() * props.length)];
   const powerTypes: PowerUpType[] = ['surge', 'shield', 'magnet'];
   const pickPower = (): PowerUpType => powerTypes[Math.floor(rng() * powerTypes.length)];
@@ -714,8 +739,8 @@ export function generateEndlessChunk(
 
     curX = baseX + baseW;
     curY = y1;
-  } else {
-    // Pattern 12: Thermal Lava Geyser Canyon -> High Skyscraper Staircase (Great for building 5-High-Place Streaks!)
+  } else if (pattern === 12) {
+    // Pattern 12: Thermal Lava Geyser Canyon -> High Skyscraper Staircase
     const gap1 = Math.round(135 + ramp * 35);
     const y1 = clampY(curY);
     const launchX = curX + gap1;
@@ -752,6 +777,147 @@ export function generateEndlessChunk(
 
     curX = landX + 480;
     curY = landY;
+  } else if (pattern === 13) {
+    // Pattern 13: Vanishing Rooftop Bridges + Rotating Skyline Turbine + Safe Under-Route
+    const gap1 = Math.round(135 + ramp * 35);
+    const y1 = clampY(curY);
+    const roofX = curX + gap1;
+    platforms.push({ id: `ec-${chunkIndex}-p1`, x: roofX, y: y1, w: 340, h: 580, kind: 'building', accentEdge: 'top', prop: 'billboard' });
+
+    const v1X = roofX + 440;
+    const v1Y = clampY(y1 - 54);
+    platforms.push({
+      id: `ec-${chunkIndex}-van1`,
+      x: v1X,
+      y: v1Y,
+      w: 220,
+      h: 28,
+      kind: 'bridge',
+      accentEdge: 'top',
+      vanishPeriod: 4.2,
+      vanishDuty: 0.68,
+      vanishPhase: chunkIndex * 0.7,
+      routeTag: 'expert',
+      isHighPlace: true,
+    });
+    // Safe main lower stepping bridge underneath vanishing bridge
+    platforms.push({
+      id: `ec-${chunkIndex}-safe1`,
+      x: v1X + 35,
+      y: clampY(y1 + 42),
+      w: 245,
+      h: 32,
+      kind: 'bridge',
+      accentEdge: 'top',
+      routeTag: 'main',
+    });
+
+    const rotX = v1X + 365;
+    const rotY = clampY(v1Y - 12);
+    rotatingObstacles.push({
+      id: `ec-${chunkIndex}-rot1`,
+      x: rotX,
+      y: rotY,
+      radius: 56,
+      armCount: 2,
+      speed: 2.1 + ramp * 0.7,
+      phase: chunkIndex * 0.8,
+      thickness: 10,
+    });
+
+    const landX = rotX + 125;
+    const landY = clampY(y1 - 14);
+    platforms.push({ id: `ec-${chunkIndex}-p2`, x: landX, y: landY, w: 560, h: 580, kind: 'building', accentEdge: 'top', prop: pickProp(), isHighPlace: landY <= HIGH_PLACE_Y_THRESHOLD });
+    shards.push(
+      { id: `ec-${chunkIndex}-vs1`, x: v1X + 110, y: v1Y - 40, isRareToken: true },
+      { id: `ec-${chunkIndex}-vs2`, x: rotX, y: rotY - 82 }
+    );
+    curX = landX + 560;
+    curY = landY;
+  } else if (pattern === 14) {
+    // Pattern 14: Precision Landing Bullseye Pads + Timed Laser Gate + Wind Canyon
+    const gap1 = Math.round(130 + ramp * 35);
+    const y1 = clampY(curY);
+    const rx = curX + gap1;
+    platforms.push({ id: `ec-${chunkIndex}-p1`, x: rx, y: y1, w: 460, h: 580, kind: 'building', accentEdge: 'top', precisionPad: true });
+
+    timedGates.push({
+      id: `ec-${chunkIndex}-tg1`,
+      x: rx + 290,
+      y: y1 - 170,
+      w: 18,
+      h: 170,
+      cycleSec: 3.2,
+      openRatio: 0.62,
+      phase: (chunkIndex * 0.9) % 3.2,
+    });
+
+    // Wind canyon across magma chasm
+    const canyonX = rx + 510;
+    windZones.push({
+      id: `ec-${chunkIndex}-wz1`,
+      x: canyonX,
+      y: y1 - 240,
+      w: 320,
+      h: 340,
+      forceX: 165,
+      forceY: -540,
+    });
+
+    const padX = canyonX + 120;
+    const padY = clampY(y1 - 65);
+    platforms.push({
+      id: `ec-${chunkIndex}-ppad`,
+      x: padX,
+      y: padY,
+      w: 145,
+      h: 28,
+      kind: 'bridge',
+      accentEdge: 'top',
+      precisionPad: true,
+      isHighPlace: true,
+    });
+
+    const landX = padX + 265;
+    const landY = clampY(y1 - 10);
+    platforms.push({ id: `ec-${chunkIndex}-p2`, x: landX, y: landY, w: 500, h: 580, kind: 'building', accentEdge: 'top', prop: pickProp(), precisionPad: true });
+    shards.push(
+      { id: `ec-${chunkIndex}-ps1`, x: padX + 72, y: padY - 42, isRareToken: true },
+      { id: `ec-${chunkIndex}-ps2`, x: rx + 298, y: y1 - 36 }
+    );
+    curX = landX + 500;
+    curY = landY;
+  } else {
+    // Pattern 15: Branching Dual-Route Skyline (Lower Safe vs. Upper Secret Garden / Observation Deck)
+    const gap1 = Math.round(130 + ramp * 35);
+    const y1 = clampY(curY);
+    const rx = curX + gap1;
+    platforms.push({ id: `ec-${chunkIndex}-p1`, x: rx, y: y1, w: 920, h: 580, kind: 'building', accentEdge: 'top', prop: 'garden', routeTag: 'main' });
+    springs.push({ id: `ec-${chunkIndex}-sp`, x: rx + 120, y: y1 - 16, w: 74, h: 16, power: 980 });
+
+    // Upper Secret Branch Deck
+    const secY = clampY(y1 - 190);
+    platforms.push({
+      id: `ec-${chunkIndex}-secdeck`,
+      x: rx + 260,
+      y: secY,
+      w: 440,
+      h: 32,
+      kind: 'bridge',
+      accentEdge: 'top',
+      prop: 'garden',
+      routeTag: 'secret',
+      isHighPlace: true,
+    });
+    shards.push(
+      { id: `ec-${chunkIndex}-secs1`, x: rx + 400, y: secY - 38, isRareToken: true },
+      { id: `ec-${chunkIndex}-secs2`, x: rx + 560, y: secY - 38, isRareToken: true }
+    );
+    powerUps.push({ id: `ec-${chunkIndex}-pu`, x: rx + 480, y: secY - 82, kind: pickPower() });
+    boosts.push({ id: `ec-${chunkIndex}-bs`, x: rx + 620, y: y1 - 6, w: 140, h: 6 });
+
+    curX = rx + 920;
+    curY = y1;
   }
 
   return {
@@ -764,6 +930,9 @@ export function generateEndlessChunk(
     airBoosters,
     glassWalls,
     thermalVents,
+    rotatingObstacles,
+    timedGates,
+    windZones,
     hazards,
     shards,
     powerUps,
@@ -773,13 +942,17 @@ export function generateEndlessChunk(
 
 export function buildLevelCourse(levelNumber: number): CourseDefinition {
   const level = Math.max(1, Math.min(MAX_LEVEL, Math.round(levelNumber)));
+  const district = getDistrictForLevel(level);
+  const challengeTag = getChallengeTagForLevel(level);
+  const biomePalette = WORLD_BIOMES[district.biomeIndex] ?? WORLD_BIOMES[0];
+
   const rng = createSeededRng((level * 2654435761 + 1013904223) >>> 0);
   const difficultyProgress = (level - 1) / (MAX_LEVEL - 1);
-  const baseSpeed = Math.round(365 + Math.min(125, (level - 1) * 0.25));
-  const chunkCount = Math.min(18, 5 + Math.floor((level - 1) / 32));
+  const baseSpeed = Math.round(368 + Math.min(130, (level - 1) * 0.26) + (challengeTag === 'speedDemon' ? 24 : 0));
+  const chunkCount = level === 500 ? 20 : Math.min(18, 5 + Math.floor((level - 1) / 30) + (challengeTag === 'skylineMarathon' ? 3 : 0));
   const tier =
     level <= 50
-      ? 'Rookie'
+      ? 'Beginner'
       : level <= 150
       ? 'Runner'
       : level <= 300
@@ -795,13 +968,19 @@ export function buildLevelCourse(levelNumber: number): CourseDefinition {
   const airBoosters: AirBooster[] = (ENDLESS_COURSE.airBoosters ?? []).map((ab) => ({ ...ab }));
   const glassWalls: GlassWall[] = (ENDLESS_COURSE.glassWalls ?? []).map((gw) => ({ ...gw }));
   const thermalVents: ThermalVent[] = (ENDLESS_COURSE.thermalVents ?? []).map((tv) => ({ ...tv }));
+  const rotatingObstacles: RotatingObstacle[] = [];
+  const timedGates: TimedGate[] = [];
+  const windZones: WindZone[] = [];
+  const secretDiscoveries: SecretDiscovery[] = [];
   const hazards: Hazard[] = ENDLESS_COURSE.hazards.map((h) => ({ ...h }));
+  const checkpoints: Checkpoint[] = [];
   const shards: Shard[] = ENDLESS_COURSE.shards.map((s) => ({ ...s }));
   const powerUps: PowerUpItem[] = (ENDLESS_COURSE.powerUps ?? []).map((pu) => ({ ...pu }));
   const enemies: EnemyEntity[] = (ENDLESS_COURSE.enemies ?? []).map((en) => ({ ...en }));
 
   let tailX = 1020;
   let tailY = 480;
+  const midCheckpointChunk = Math.floor(chunkCount * 0.5);
 
   for (let i = 1; i <= chunkCount; i++) {
     const chunk = generateEndlessChunk(
@@ -818,18 +997,53 @@ export function buildLevelCourse(levelNumber: number): CourseDefinition {
     airBoosters.push(...chunk.airBoosters);
     glassWalls.push(...chunk.glassWalls);
     thermalVents.push(...chunk.thermalVents);
+    rotatingObstacles.push(...chunk.rotatingObstacles);
+    timedGates.push(...chunk.timedGates);
+    windZones.push(...chunk.windZones);
     hazards.push(...chunk.hazards);
     shards.push(...chunk.shards);
     powerUps.push(...chunk.powerUps);
     enemies.push(...chunk.enemies);
     tailX = chunk.nextX;
     tailY = chunk.nextY;
+
+    // Place a mid-stage checkpoint on a solid building platform
+    if (level >= 3 && i === midCheckpointChunk) {
+      const solidPlat = chunk.platforms.find((p) => p.kind === 'building' && p.w >= 320);
+      if (solidPlat) {
+        checkpoints.push({
+          id: `lvl-${level}-cp1`,
+          x: solidPlat.x + Math.round(solidPlat.w * 0.5),
+          y: solidPlat.y,
+          index: 1,
+        });
+      }
+    }
+  }
+
+  // Secret Discovery Portal placed on an elevated high-route platform in each district
+  const catalogSecret = SECRET_CATALOG[district.index % SECRET_CATALOG.length];
+  if (catalogSecret && (level % 2 === 0 || level === 1 || level === 500)) {
+    const highPlat = platforms.find((p) => p.isHighPlace && p.x > 1600 && p.w >= 180) ?? platforms[platforms.length - 1];
+    if (highPlat) {
+      secretDiscoveries.push({
+        id: catalogSecret.id,
+        title: catalogSecret.title,
+        districtIndex: district.index,
+        x: highPlat.x + Math.round(highPlat.w * 0.5) - 24,
+        y: highPlat.y - 68,
+        w: 48,
+        h: 64,
+        coinBonus: catalogSecret.coinBonus,
+        xpBonus: catalogSecret.xpBonus,
+      });
+    }
   }
 
   // Finish Rooftop & Finish Portal Gate
   const finishPlatX = tailX + 135;
   const finishPlatY = Math.max(240, Math.min(490, tailY));
-  const finishPlatW = 620;
+  const finishPlatW = level === 500 ? 820 : 620;
   platforms.push({
     id: `lvl-${level}-finish-roof`,
     x: finishPlatX,
@@ -838,29 +1052,66 @@ export function buildLevelCourse(levelNumber: number): CourseDefinition {
     h: 580,
     kind: 'building',
     accentEdge: 'top',
-    prop: 'antenna',
+    prop: level === 500 ? 'billboard' : 'antenna',
+    precisionPad: challengeTag === 'perfectLanding' || level === 500,
   });
 
-  const finishX = finishPlatX + 235;
+  if (level === 500) {
+    // Extra Rooftop 500 grand apex approach: twin glass crash + precision zenith pad before final gate
+    glassWalls.push(
+      { id: 'lvl-500-gw-final1', x: finishPlatX + 180, y: finishPlatY - 220, w: 22, h: 220 },
+      { id: 'lvl-500-gw-final2', x: finishPlatX + 340, y: finishPlatY - 220, w: 22, h: 220 }
+    );
+    shards.push(
+      { id: 'lvl-500-crown1', x: finishPlatX + 260, y: finishPlatY - 80, isRareToken: true },
+      { id: 'lvl-500-crown2', x: finishPlatX + 420, y: finishPlatY - 80, isRareToken: true }
+    );
+  }
+
+  const finishX = finishPlatX + (level === 500 ? 520 : 235);
   const finishY = finishPlatY;
+  const estDistPx = Math.max(2000, finishX - 120);
+  const goldTimeSec = Math.round(estDistPx / Math.max(320, baseSpeed * 1.08));
+  const silverTimeSec = Math.round(goldTimeSec * 1.28);
+  const speedTargetSec = challengeTag === 'speedDemon' || level === 500 ? Math.round(goldTimeSec * 1.12) : undefined;
 
   return {
     id: `level-${level}`,
     levelNumber: level,
-    title: `Level ${level}`,
-    subtitle: `Stage ${level} of ${MAX_LEVEL} · Pass 5 high places without falling to level up`,
+    title: level === 500 ? 'Rooftop 500: The Final Leap' : `Rooftop ${level}`,
+    subtitle: `${district.name} · ${getChallengeLabel(challengeTag)}`,
     difficulty: tier,
+    districtId: district.id,
+    districtName: district.name,
+    biomeIndex: district.biomeIndex,
+    challengeTag,
+    weatherOverride: district.defaultWeather,
+    timeOfDayOverride: district.defaultTimeOfDay,
+    speedTargetSec,
+    noMistakeAllowed: challengeTag === 'noMistake',
     baseSpeed,
     timeLimitSec: 0,
-    goldTimeSec: 1000,
-    silverTimeSec: 500,
+    goldTimeSec,
+    silverTimeSec,
     isEndless: false,
     fallLimitY: LAVA_SURFACE_Y + 8,
     startX: 120,
     startY: 420,
     finishX,
     finishY,
-    theme: ENDLESS_COURSE.theme,
+    theme: {
+      name: district.name,
+      skyTop: biomePalette.skyTop,
+      skyBottom: biomePalette.skyBottom,
+      sunColor: biomePalette.sunColor,
+      farCity: biomePalette.farCity,
+      midCity: biomePalette.midCity,
+      buildingFill: biomePalette.buildingFill,
+      buildingStroke: biomePalette.buildingStroke,
+      ledgeHighlight: biomePalette.ledgeHighlight,
+      isNight: biomePalette.isNight,
+      weather: biomePalette.weather,
+    },
     platforms,
     rails,
     springs,
@@ -868,11 +1119,16 @@ export function buildLevelCourse(levelNumber: number): CourseDefinition {
     airBoosters,
     glassWalls,
     thermalVents,
+    rotatingObstacles,
+    timedGates,
+    windZones,
+    secretDiscoveries,
     hazards,
-    checkpoints: [],
+    checkpoints,
     shards,
     powerUps,
     enemies,
   };
 }
+
 

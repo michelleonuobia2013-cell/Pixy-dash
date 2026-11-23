@@ -2,22 +2,32 @@ import {
   ActivePowerUpTimers,
   AirBooster,
   CameraZoom,
+  CharacterCustomization,
   CourseDefinition,
   EnemyEntity,
   FloatingCallout,
+  GhostParticipant,
   GlassWall,
   GrindRail,
   HudSnapshot,
   InputState,
+  MultiplayerRemotePlayer,
   MysteryChaserState,
+  ParkourSkills,
   Particle,
   Platform,
   PlayerState,
   PowerUpItem,
+  ReplayFrame,
+  RivalRunnerState,
+  RotatingObstacle,
   RunSummary,
   SavedRunSnapshot,
+  SecretDiscovery,
   ThermalVent,
+  TimedGate,
   TutorialStepId,
+  WindZone,
 } from '../types/game';
 import { soundEngine } from '../audio/soundEngine';
 import { haptics } from '../utils/haptics';
@@ -30,6 +40,9 @@ import {
   MAX_LEVEL,
 } from '../levels/courses';
 import { pickRandomNextBiome, WORLD_BIOMES } from '../levels/biomes';
+import { getTimeOfDayLabel, getWeatherDisplayName } from '../levels/districts';
+import { DEFAULT_CUSTOMIZATION } from './progression';
+import { createRivalsForCourse, stepRivalRunners } from './rivals';
 
 export const PLAYER_W = 26;
 export const PLAYER_H_STAND = 54;
@@ -50,17 +63,34 @@ export interface WorldRuntime {
   airBoosters: AirBooster[];
   glassWalls: GlassWall[];
   thermalVents: ThermalVent[];
+  rotatingObstacles: RotatingObstacle[];
+  timedGates: TimedGate[];
+  windZones: WindZone[];
+  secretDiscoveries: SecretDiscovery[];
   hazards: CourseDefinition['hazards'];
   checkpoints: CourseDefinition['checkpoints'];
   shards: CourseDefinition['shards'];
   powerUps: PowerUpItem[];
   enemies: EnemyEntity[];
   player: PlayerState;
+  customization: CharacterCustomization;
+  skills: ParkourSkills;
+  rivals: RivalRunnerState[];
+  ghosts: GhostParticipant[];
+  remotePlayers: MultiplayerRemotePlayer[];
+  replayFrames: ReplayFrame[];
+  replaySampleTimer: number;
   particles: Particle[];
   callouts: FloatingCallout[];
   elapsedTime: number;
   simTime: number;
+  slowMoTimer: number;
+  cinematicSlowMoEnabled: boolean;
   score: number;
+  coinsEarned: number;
+  xpEarned: number;
+  perfectLandings: number;
+  secretsFoundInRun: string[];
   takedownsCount: number;
   highPlaceStreak: number;
   highPlacesPassed: number;
@@ -97,6 +127,9 @@ export interface WorldRuntime {
   levelCleared: boolean;
   caughtByChaser: boolean;
   fellInLava: boolean;
+  noMistakeBroken: boolean;
+  activeEventTitle?: string;
+  tournamentId?: string;
   chaser: MysteryChaserState;
   endlessChunkCount: number;
   endlessTailX: number;
@@ -120,7 +153,18 @@ function createScarf(x: number, y: number) {
 
 export function createWorldRuntime(
   course: CourseDefinition,
-  options?: { tutorialMode?: boolean; cameraZoom?: CameraZoom }
+  options?: {
+    tutorialMode?: boolean;
+    cameraZoom?: CameraZoom;
+    customization?: CharacterCustomization;
+    skills?: ParkourSkills;
+    rivalsEnabled?: boolean;
+    ghosts?: GhostParticipant[];
+    cinematicSlowMoEnabled?: boolean;
+    activeEventTitle?: string;
+    tournamentId?: string;
+    isMultiplayer?: boolean;
+  }
 ): WorldRuntime {
   const platforms = course.platforms.map((p) => ({ ...p }));
   const rails = course.rails.map((r) => ({ ...r }));
@@ -129,6 +173,10 @@ export function createWorldRuntime(
   const airBoosters = (course.airBoosters ?? []).map((ab) => ({ ...ab, triggered: false }));
   const glassWalls = (course.glassWalls ?? []).map((gw) => ({ ...gw, shattered: false, shards: [] }));
   const thermalVents = (course.thermalVents ?? []).map((tv) => ({ ...tv }));
+  const rotatingObstacles = (course.rotatingObstacles ?? []).map((ro) => ({ ...ro }));
+  const timedGates = (course.timedGates ?? []).map((tg) => ({ ...tg }));
+  const windZones = (course.windZones ?? []).map((wz) => ({ ...wz }));
+  const secretDiscoveries = (course.secretDiscoveries ?? []).map((sd) => ({ ...sd }));
   const hazards = course.hazards.map((h) => ({ ...h }));
   const checkpoints = course.checkpoints.map((c) => ({ ...c }));
   const shards = course.shards.map((s) => ({ ...s, collected: false }));
@@ -139,6 +187,21 @@ export function createWorldRuntime(
   const startPlatform = course.platforms[0];
   const initialTailX = startPlatform ? startPlatform.x + startPlatform.w : 1020;
   const initialTailY = startPlatform ? startPlatform.y : 480;
+  const customization: CharacterCustomization = options?.customization
+    ? { ...options.customization }
+    : { ...DEFAULT_CUSTOMIZATION };
+  const skills: ParkourSkills = options?.skills
+    ? { ...options.skills }
+    : {
+        sprintMastery: 0,
+        airControl: 0,
+        wallRunGrip: 0,
+        doubleJumpBoost: 0,
+        precisionLanding: 0,
+        fastRecovery: 0,
+      };
+  const useRivals = !tutorialMode && !options?.isMultiplayer && Boolean(options?.rivalsEnabled);
+  const rivals = useRivals ? createRivalsForCourse(course, 2) : [];
 
   const runtime: WorldRuntime = {
     course: { ...course },
@@ -149,6 +212,10 @@ export function createWorldRuntime(
     airBoosters,
     glassWalls,
     thermalVents,
+    rotatingObstacles,
+    timedGates,
+    windZones,
+    secretDiscoveries,
     hazards,
     checkpoints,
     shards,
@@ -165,6 +232,8 @@ export function createWorldRuntime(
       action: 'run',
       grounded: false,
       onWall: false,
+      wallRunTimer: 0,
+      wallRunCooldown: 0,
       coyoteTimer: 0,
       jumpBufferTimer: 0,
       doubleJumpAvailable: true,
@@ -181,12 +250,27 @@ export function createWorldRuntime(
       afterimages: [],
       lastFootstepPhase: 0,
       highFallArmed: false,
+      takeoffX: course.startX,
+      longestJumpM: 0,
     },
+    customization,
+    skills,
+    rivals,
+    ghosts: options?.ghosts ?? [],
+    remotePlayers: [],
+    replayFrames: [],
+    replaySampleTimer: 0,
     particles: [],
     callouts: [],
     elapsedTime: 0,
     simTime: 0,
+    slowMoTimer: 0,
+    cinematicSlowMoEnabled: options?.cinematicSlowMoEnabled ?? true,
     score: 0,
+    coinsEarned: 0,
+    xpEarned: 0,
+    perfectLandings: 0,
+    secretsFoundInRun: [],
     takedownsCount: 0,
     highPlaceStreak: 0,
     highPlacesPassed: 0,
@@ -218,6 +302,8 @@ export function createWorldRuntime(
     afterimageCooldown: 0,
     biomeIndex: tutorialMode
       ? 0
+      : typeof course.biomeIndex === 'number'
+      ? course.biomeIndex
       : course.levelNumber && course.levelNumber > 0
       ? (course.levelNumber - 1) % WORLD_BIOMES.length
       : Math.floor(Math.random() * WORLD_BIOMES.length),
@@ -227,6 +313,9 @@ export function createWorldRuntime(
     levelCleared: false,
     caughtByChaser: false,
     fellInLava: false,
+    noMistakeBroken: false,
+    activeEventTitle: options?.activeEventTitle,
+    tournamentId: options?.tournamentId,
     chaser: {
       x: course.startX - 360,
       y: course.startY - 22,
@@ -270,6 +359,9 @@ function extendEndlessWorld(world: WorldRuntime, targetX: number) {
     world.airBoosters.push(...chunk.airBoosters.map((ab) => ({ ...ab, triggered: false })));
     world.glassWalls.push(...chunk.glassWalls.map((gw) => ({ ...gw, shattered: false, shards: [] })));
     world.thermalVents.push(...chunk.thermalVents.map((tv) => ({ ...tv })));
+    world.rotatingObstacles.push(...chunk.rotatingObstacles.map((ro) => ({ ...ro })));
+    world.timedGates.push(...chunk.timedGates.map((tg) => ({ ...tg })));
+    world.windZones.push(...chunk.windZones.map((wz) => ({ ...wz })));
     world.hazards.push(...chunk.hazards);
     world.shards.push(...chunk.shards.map((s) => ({ ...s, collected: false })));
     world.powerUps.push(...chunk.powerUps.map((pu) => ({ ...pu, collected: false })));
@@ -277,6 +369,31 @@ function extendEndlessWorld(world: WorldRuntime, targetX: number) {
     world.endlessTailX = chunk.nextX;
     world.endlessTailY = chunk.nextY;
   }
+}
+
+export function getVanishingPlatformState(p: Platform, simTime: number): { solid: boolean; alpha: number; warning: boolean } {
+  if (!p.vanishPeriod || p.vanishPeriod <= 0) {
+    return { solid: true, alpha: 1, warning: false };
+  }
+  const period = p.vanishPeriod;
+  const duty = p.vanishDuty ?? 0.68;
+  const phase = (((simTime + (p.vanishPhase ?? 0)) % period) + period) % period;
+  const ratio = phase / period;
+  if (ratio < duty) {
+    const warning = ratio > duty - 0.16;
+    const pulse = warning ? 0.45 + 0.55 * Math.abs(Math.sin(simTime * 24)) : 1;
+    return { solid: true, alpha: pulse, warning };
+  }
+  return { solid: false, alpha: 0.14, warning: false };
+}
+
+export function isTimedGateOpen(gate: TimedGate, simTime: number): { open: boolean; warning: boolean } {
+  const period = Math.max(1.2, gate.cycleSec);
+  const phase = (((simTime + gate.phase) % period) + period) % period;
+  const ratio = phase / period;
+  const open = ratio < gate.openRatio;
+  const warning = open && ratio > gate.openRatio - 0.14;
+  return { open, warning };
 }
 
 export function isCollapsibleBlock(p: Platform, tutorialActive: boolean): boolean {
@@ -613,13 +730,48 @@ export function stepWorld(
 
   updateTutorialGuide(world, input, clampedDt);
 
-  // Bullet-time slow-mo while waiting on a tutorial action cue
-  const dt = world.tutorialWaitingAction ? clampedDt * 0.035 : clampedDt;
-  const visualDt = world.tutorialWaitingAction ? clampedDt * 0.65 : clampedDt;
+  // Bullet-time slow-mo while waiting on a tutorial action cue or dramatic slow-mo burst
+  let dt = world.tutorialWaitingAction ? clampedDt * 0.035 : clampedDt;
+  if (!world.tutorialWaitingAction && world.slowMoTimer > 0) {
+    world.slowMoTimer = Math.max(0, world.slowMoTimer - clampedDt);
+    dt *= 0.45;
+  }
+  const visualDt = world.tutorialWaitingAction ? clampedDt * 0.65 : dt;
 
   const prevElapsed = world.elapsedTime;
   world.elapsedTime += dt;
   world.simTime += visualDt;
+
+  // Record replay frame every 0.08s
+  world.replaySampleTimer += dt;
+  if (world.replaySampleTimer >= 0.08) {
+    world.replaySampleTimer = 0;
+    world.replayFrames.push({
+      t: Number(world.elapsedTime.toFixed(2)),
+      x: Math.round(world.player.x),
+      y: Math.round(world.player.y),
+      h: Math.round(world.player.h),
+      action: world.player.action,
+      facing: world.player.facing,
+      vx: Math.round(world.player.vx),
+    });
+    if (world.replayFrames.length > 900) {
+      world.replayFrames.shift();
+    }
+  }
+
+  // Advance NPC Rivals using physics-aware rooftop traversal
+  if (world.rivals.length > 0 && !world.tutorialActive) {
+    stepRivalRunners(
+      world.rivals,
+      world.platforms,
+      world.course.baseSpeed,
+      world.course.finishX,
+      Boolean(world.course.isEndless),
+      world.elapsedTime,
+      dt
+    );
+  }
 
   if (!world.tutorialActive) {
     world.biomeBlendElapsed += dt;
@@ -654,8 +806,11 @@ export function stepWorld(
   const p = world.player;
   p.animTime += dt;
 
+  const extraCoyote = world.skills.airControl * 0.03;
   if (p.coyoteTimer > 0) p.coyoteTimer -= dt;
   if (p.jumpBufferTimer > 0) p.jumpBufferTimer -= dt;
+  if (p.wallRunTimer > 0) p.wallRunTimer = Math.max(0, p.wallRunTimer - dt);
+  if (p.wallRunCooldown > 0) p.wallRunCooldown = Math.max(0, p.wallRunCooldown - dt);
   if (world.shakeTimer > 0) world.shakeTimer -= dt;
   if (world.lastTrickTimer > 0) world.lastTrickTimer -= dt;
   if (world.levelUpBannerTimer > 0) world.levelUpBannerTimer = Math.max(0, world.levelUpBannerTimer - dt);
@@ -669,18 +824,24 @@ export function stepWorld(
   if (world.powerUpTimers.shield > 0) world.powerUpTimers.shield = Math.max(0, world.powerUpTimers.shield - dt);
   if (world.powerUpTimers.magnet > 0) world.powerUpTimers.magnet = Math.max(0, world.powerUpTimers.magnet - dt);
 
-  if (input.jumpPressed) p.jumpBufferTimer = JUMP_BUFFER;
+  if (input.jumpPressed) p.jumpBufferTimer = JUMP_BUFFER + extraCoyote;
 
   p.squashX += (1 - p.squashX) * Math.min(1, dt * 14);
   p.squashY += (1 - p.squashY) * Math.min(1, dt * 14);
 
-  // Target auto-run speed (gentle progressive ramp + active Overdrive Surge bonus)
+  // Target auto-run speed (progressive ramp + Sprint Mastery skill + Overdrive Surge + Rain Slide boost)
   const endlessBonus = world.course.isEndless ? Math.min(95, world.elapsedTime * 1.05) : 0;
   const surgeBonus = world.powerUpTimers.surge > 0 ? 125 : 0;
-  let targetSpeed = world.course.baseSpeed + endlessBonus + surgeBonus;
-  if (input.left && !input.right) targetSpeed *= 0.72;
-  else if (input.right && !input.left) targetSpeed *= 1.18;
-  if (world.glassSlowTimer > 0) targetSpeed *= 0.9;
+  const skillSpeedBonus = world.skills.sprintMastery * 16;
+  const sprintBurst = input.sprintHeld ? 55 + world.skills.sprintMastery * 14 : 0;
+  let targetSpeed = world.course.baseSpeed + endlessBonus + surgeBonus + skillSpeedBonus + sprintBurst;
+  if (input.left && !input.right) targetSpeed *= 0.72 - world.skills.airControl * 0.03;
+  else if (input.right && !input.left) targetSpeed *= 1.18 + world.skills.sprintMastery * 0.02;
+  if (world.glassSlowTimer > 0) targetSpeed *= 0.9 + world.skills.fastRecovery * 0.025;
+  const weather = world.course.weatherOverride ?? 'sunny';
+  if ((weather === 'rain' || weather === 'heavyRain') && p.h === PLAYER_H_SLIDE) {
+    targetSpeed *= 1.12; // Rain gives faster wet-surface rooftop slides!
+  }
 
   // Active Ledge Mantle
   if (p.mantleTimer > 0) {
@@ -797,18 +958,27 @@ export function stepWorld(
   }
 
   // Smooth horizontal auto-run acceleration toward targetSpeed
+  const accelRate = 1850 + world.skills.sprintMastery * 280;
   if (p.vx < targetSpeed) {
-    p.vx = Math.min(targetSpeed, p.vx + 1850 * dt);
+    p.vx = Math.min(targetSpeed, p.vx + accelRate * dt);
   } else if (p.vx > targetSpeed) {
-    // Let boost strip / double jump extra speed decay gently
     p.vx = Math.max(targetSpeed, p.vx - 260 * dt);
   }
 
-  // Gravity + optional fast-fall when holding slide in mid-air
+  // Gravity + optional fast-fall + controlled air-glide when holding jump with Air Control
   const extraFall = !p.grounded && input.slideHeld && p.vy > -100 ? 850 : 0;
-  p.vy += (GRAVITY + extraFall) * dt;
-  if (p.onWall && p.vy > 0 && !p.grounded) {
-    p.vy = Math.min(p.vy, 160);
+  const controlledGlide =
+    !p.grounded && !p.doubleJumpAvailable && input.jumpHeld && p.vy > 60
+      ? 0.58 - world.skills.airControl * 0.08
+      : 1;
+  p.vy += (GRAVITY * controlledGlide + extraFall) * dt;
+  if (p.onWall && !p.grounded) {
+    if (p.wallRunTimer > 0 && input.jumpHeld) {
+      // Active vertical wall-run climb before kicking off!
+      p.vy = -210 - world.skills.wallRunGrip * 35;
+    } else if (p.vy > 0) {
+      p.vy = Math.min(p.vy, 160);
+    }
   }
   if (p.vy > 1150) p.vy = 1150;
   if (p.vy > 520) p.highFallArmed = true;
@@ -824,6 +994,7 @@ export function stepWorld(
       p.grounded = false;
       p.coyoteTimer = 0;
       p.jumpBufferTimer = 0;
+      p.takeoffX = p.x;
       p.squashX = 0.76;
       p.squashY = 1.28;
       pushAfterimage(p, 0.68);
@@ -831,11 +1002,15 @@ export function stepWorld(
       haptics.pulse(12);
       spawnParticles(world, p.x + p.w / 2, p.y + p.h, 6, 'dust', '#E2E8F0', 130, -55);
     } else if (p.onWall) {
-      // Forgiving forward wall vault upward
-      p.vy = JUMP_VEL * 0.98;
+      // Forgiving forward wall vault upward (amplified by Wall-Run Grip skill)
+      p.vy = JUMP_VEL * (0.98 + world.skills.wallRunGrip * 0.04);
+      p.vx = Math.max(p.vx, targetSpeed + 65 + world.skills.wallRunGrip * 20);
       p.onWall = false;
+      p.wallRunTimer = 0;
+      p.wallRunCooldown = 0.25;
       p.jumpBufferTimer = 0;
       p.doubleJumpAvailable = true;
+      p.takeoffX = p.x;
       p.squashX = 0.76;
       p.squashY = 1.28;
       pushAfterimage(p, 0.76);
@@ -847,13 +1022,13 @@ export function stepWorld(
       spawnParticles(world, p.x + p.w, p.y + p.h * 0.5, 1, 'ring', '#FB923C', 140, -40);
       addTrick(world, 'WALL VAULT', 70, p.x + p.w, p.y);
     } else if (p.doubleJumpAvailable) {
-      // Mid-air Double Jump / Air Vault
+      // Mid-air Double Jump / Air Vault (boosted by Double-Jump skill)
       if (p.h === PLAYER_H_SLIDE && canStandUp(world, p.x, p.y + p.h)) {
         p.h = PLAYER_H_STAND;
         p.y = p.y + PLAYER_H_SLIDE - PLAYER_H_STAND;
       }
-      p.vy = DOUBLE_JUMP_VEL;
-      p.vx = Math.max(p.vx, targetSpeed + 55);
+      p.vy = DOUBLE_JUMP_VEL * (1 + world.skills.doubleJumpBoost * 0.06);
+      p.vx = Math.max(p.vx, targetSpeed + 55 + world.skills.doubleJumpBoost * 18);
       p.doubleJumpAvailable = false;
       p.jumpBufferTimer = 0;
       pushAfterimage(p, 0.85);
@@ -868,12 +1043,14 @@ export function stepWorld(
     p.vy *= 0.82;
   }
 
-  // X Collision + Auto-Mantle
+  // X Collision + Auto-Mantle + Wall Run
   p.x += p.vx * dt;
   p.onWall = false;
 
   for (const plat of world.platforms) {
     if (plat.collapsed || plat.kind === 'upperBuilding') continue;
+    const vanish = getVanishingPlatformState(plat, world.simTime);
+    if (!vanish.solid) continue;
     const b = getPlatformBounds(plat, world.simTime);
     if (rectsOverlap(p.x, p.y, p.w, p.h, b.x, b.y, plat.w, plat.h)) {
       const topOverlap = p.y + p.h - b.y;
@@ -942,6 +1119,9 @@ export function stepWorld(
       if (!p.grounded && plat.kind !== 'overhead') {
         p.onWall = true;
         p.doubleJumpAvailable = true;
+        if (p.wallRunCooldown <= 0 && p.wallRunTimer <= 0) {
+          p.wallRunTimer = 0.48 + world.skills.wallRunGrip * 0.16;
+        }
       }
     }
   }
@@ -956,14 +1136,32 @@ export function stepWorld(
 
   for (const plat of world.platforms) {
     if (plat.collapsed) continue;
+    const vanish = getVanishingPlatformState(plat, world.simTime);
+    if (!vanish.solid) continue;
     const b = getPlatformBounds(plat, world.simTime);
     const isOneWayTop = plat.kind === 'upperBuilding';
     if (rectsOverlap(p.x, p.y, p.w, groundCheckH, b.x, b.y, plat.w, plat.h)) {
       if (p.vy >= 0 && (!isOneWayTop || prevFootY <= b.y + 16 + Math.abs(b.dy) * dt)) {
         p.y = b.y - p.h;
         standingPlatform = plat;
+        if (!wasGrounded) {
+          const jumpDistM = Math.max(0, Math.round((p.x - p.takeoffX) / 28));
+          if (jumpDistM > p.longestJumpM) {
+            p.longestJumpM = jumpDistM;
+          }
+        }
         if (!wasGrounded && p.vy > 200) {
-          if (p.highFallArmed && input.slideHeld) {
+          const hitPrecisionPad = Boolean(plat.precisionPad);
+          const timedPrecision = hitPrecisionPad || (input.slidePressed && world.skills.precisionLanding > 0);
+          if (timedPrecision) {
+            world.perfectLandings += 1;
+            world.coinsEarned += 10;
+            world.xpEarned += 15;
+            p.vx = Math.max(p.vx, targetSpeed + 95 + world.skills.precisionLanding * 15);
+            soundEngine.playCheckpoint();
+            spawnParticles(world, p.x + p.w / 2, b.y, 2, 'ring', '#10B981', 160, -25);
+            addTrick(world, 'PERFECT LANDING', 150, p.x + p.w / 2, p.y);
+          } else if (p.highFallArmed && input.slideHeld) {
             p.rollTimer = 0.3;
             p.h = PLAYER_H_SLIDE;
             p.y = b.y - PLAYER_H_SLIDE;
@@ -992,9 +1190,10 @@ export function stepWorld(
         }
         p.vy = 0;
         p.grounded = true;
-        p.coyoteTimer = COYOTE_TIME;
+        p.coyoteTimer = COYOTE_TIME + world.skills.airControl * 0.035;
         p.doubleJumpAvailable = true;
         p.highFallArmed = false;
+        p.takeoffX = p.x;
 
         if (plat.isHighPlace || plat.kind === 'upperBuilding' || b.y <= HIGH_PLACE_Y_THRESHOLD) {
           recordHighPlacePass(world, plat.id, p.x + p.w * 0.5, b.y);
@@ -1019,7 +1218,8 @@ export function stepWorld(
   }
 
   if (wasGrounded && !p.grounded && p.vy >= 0) {
-    p.coyoteTimer = COYOTE_TIME;
+    p.coyoteTimer = COYOTE_TIME + world.skills.airControl * 0.035;
+    p.takeoffX = p.x;
   }
 
   // Grind Rail & Overhead Bar Line Glider Snap
@@ -1084,7 +1284,7 @@ export function stepWorld(
   else if (p.rollTimer > 0) p.action = 'roll';
   else if (p.h === PLAYER_H_SLIDE) p.action = 'slide';
   else if (!p.grounded) {
-    if (p.onWall) p.action = 'wallSlide';
+    if (p.onWall) p.action = p.wallRunTimer > 0 ? 'wallRun' : 'wallSlide';
     else p.action = p.vy < 0 ? (p.doubleJumpAvailable ? 'jump' : 'doubleJump') : 'fall';
   } else if (Math.abs(p.vx) > 20) {
     p.action = 'run';
@@ -1235,6 +1435,9 @@ function postStepChecks(world: WorldRuntime, dt: number) {
         : p.h === PLAYER_H_SLIDE || p.rollTimer > 0
         ? 'SLIDE SHATTER'
         : 'GLASS BREACH';
+      if (world.cinematicSlowMoEnabled && !p.grounded) {
+        world.slowMoTimer = Math.max(world.slowMoTimer, 0.28);
+      }
       addTrick(world, breakLabel, !p.grounded || p.h === PLAYER_H_SLIDE ? 130 : 110, impactX, impactY - 24);
     }
   }
@@ -1260,11 +1463,14 @@ function postStepChecks(world: WorldRuntime, dt: number) {
     if (!sh.collected && rectsOverlap(p.x - 6, p.y - 6, p.w + 12, p.h + 12, sh.x - 14, sh.y - 14, 28, 28)) {
       sh.collected = true;
       world.shardsCollected += 1;
+      const coinBonus = sh.isRareToken ? 35 : 8;
+      world.coinsEarned += coinBonus;
+      world.xpEarned += sh.isRareToken ? 40 : 10;
       soundEngine.playShard();
       haptics.pulse(10);
-      spawnParticles(world, sh.x, sh.y, 12, 'spark', '#FBBF24', 210, -65);
-      spawnParticles(world, sh.x, sh.y, 1, 'ring', '#FDE68A', 120, -20);
-      addTrick(world, 'SHARD', 100, sh.x, sh.y);
+      spawnParticles(world, sh.x, sh.y, 12, 'spark', sh.isRareToken ? '#22D3EE' : '#FBBF24', 210, -65);
+      spawnParticles(world, sh.x, sh.y, 1, 'ring', sh.isRareToken ? '#67E8F9' : '#FDE68A', 120, -20);
+      addTrick(world, sh.isRareToken ? 'RARE TOKEN' : 'SHARD', sh.isRareToken ? 220 : 100, sh.x, sh.y);
     }
   }
 
@@ -1410,6 +1616,93 @@ function postStepChecks(world: WorldRuntime, dt: number) {
     }
   }
 
+  // Wind Zones (visible skyward crosswind / updraft canyons)
+  for (const wz of world.windZones) {
+    if (rectsOverlap(p.x, p.y, p.w, p.h, wz.x, wz.y, wz.w, wz.h)) {
+      p.vx = Math.min(780, p.vx + wz.forceX * dt);
+      p.vy = Math.max(-680, p.vy + wz.forceY * dt);
+    }
+  }
+
+  // Rotating Skyline Turbine Obstacles (predictable arm collisions)
+  for (const ro of world.rotatingObstacles) {
+    const pxC = p.x + p.w * 0.5;
+    const pyC = p.y + p.h * 0.5;
+    if (Math.hypot(pxC - ro.x, pyC - ro.y) > ro.radius + 32) continue;
+    for (let arm = 0; arm < ro.armCount; arm++) {
+      const angle = world.simTime * ro.speed + ro.phase + (arm * Math.PI * 2) / ro.armCount;
+      const tipX = ro.x + Math.cos(angle) * ro.radius;
+      const tipY = ro.y + Math.sin(angle) * ro.radius;
+      // Check sample points along arm
+      let hit = false;
+      for (let s = 0.25; s <= 1; s += 0.25) {
+        const sx = ro.x + (tipX - ro.x) * s;
+        const sy = ro.y + (tipY - ro.y) * s;
+        if (rectsOverlap(p.x + 2, p.y + 2, p.w - 4, p.h - 4, sx - ro.thickness * 0.5, sy - ro.thickness * 0.5, ro.thickness, ro.thickness)) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit && world.enemyHitCooldown <= 0) {
+        if (world.powerUpTimers.shield > 0 || world.powerUpTimers.surge > 0) {
+          world.enemyHitCooldown = 0.6;
+          spawnParticles(world, pxC, pyC, 12, 'spark', '#34D399', 200, -80);
+          addTrick(world, 'TURBINE DEFLECT', 120, pxC, p.y);
+        } else {
+          world.enemyHitCooldown = 0.85;
+          p.vx = Math.min(p.vx, 230);
+          p.vy = Math.min(p.vy, -240);
+          world.comboCount = 0;
+          world.highPlaceStreak = 0;
+          soundEngine.playFail();
+          triggerFlash(world, '#EF4444', 0.25);
+          world.chaser.x = Math.min(p.x - 42, world.chaser.x + 24);
+          spawnParticles(world, pxC, pyC, 12, 'spark', '#EF4444', 200, -80);
+        }
+        break;
+      }
+    }
+  }
+
+  // Timed Laser Security Gates
+  for (const tg of world.timedGates) {
+    const state = isTimedGateOpen(tg, world.simTime);
+    if (!state.open && rectsOverlap(p.x + 3, p.y + 3, p.w - 6, p.h - 6, tg.x, tg.y, tg.w, tg.h)) {
+      if (world.powerUpTimers.shield > 0 || world.powerUpTimers.surge > 0) {
+        if (world.enemyHitCooldown <= 0) {
+          world.enemyHitCooldown = 0.5;
+          addTrick(world, 'GATE BREACH', 120, tg.x, tg.y + 30);
+        }
+      } else if (world.enemyHitCooldown <= 0) {
+        world.enemyHitCooldown = 0.85;
+        p.vx = 180;
+        world.comboCount = 0;
+        world.highPlaceStreak = 0;
+        soundEngine.playFail();
+        triggerFlash(world, '#EF4444', 0.25);
+        world.chaser.x = Math.min(p.x - 40, world.chaser.x + 28);
+      }
+    }
+  }
+
+  // Secret Discovery Locations (Optional High-Reward Exploration)
+  for (const sd of world.secretDiscoveries) {
+    if (!world.secretsFoundInRun.includes(sd.id) && rectsOverlap(p.x, p.y, p.w, p.h, sd.x, sd.y, sd.w, sd.h)) {
+      world.secretsFoundInRun.push(sd.id);
+      world.coinsEarned += sd.coinBonus;
+      world.xpEarned += sd.xpBonus;
+      if (world.cinematicSlowMoEnabled) {
+        world.slowMoTimer = Math.max(world.slowMoTimer, 0.42);
+      }
+      soundEngine.playLevelUp();
+      haptics.pulse([16, 20, 40]);
+      triggerFlash(world, '#34D399', 0.3);
+      spawnParticles(world, sd.x + sd.w * 0.5, sd.y + sd.h * 0.5, 20, 'confetti', '#34D399', 260, -180);
+      spawnParticles(world, sd.x + sd.w * 0.5, sd.y + sd.h * 0.5, 2, 'ring', '#A7F3D0', 160, -20);
+      addTrick(world, `SECRET: ${sd.title.toUpperCase()}`, 350, sd.x + sd.w * 0.5, sd.y - 12);
+    }
+  }
+
   for (const cp of world.checkpoints) {
     if (cp.index > world.activeCheckpointIndex && Math.abs(p.x + p.w / 2 - cp.x) < 42 && Math.abs(p.y + p.h - cp.y) < 120) {
       world.activeCheckpointIndex = cp.index;
@@ -1433,12 +1726,18 @@ function postStepChecks(world: WorldRuntime, dt: number) {
 
   for (const hz of world.hazards) {
     if (rectsOverlap(p.x + 4, p.y + 4, p.w - 8, p.h - 6, hz.x + 2, hz.y + 2, hz.w - 4, hz.h - 2)) {
+      if (world.course.noMistakeAllowed) {
+        world.noMistakeBroken = true;
+      }
       handleFail(world, false);
       return;
     }
   }
 
   if (p.y + p.h >= LAVA_SURFACE_Y || p.y > world.course.fallLimitY) {
+    if (world.course.noMistakeAllowed) {
+      world.noMistakeBroken = true;
+    }
     handleFail(world, true);
     return;
   }
@@ -1621,6 +1920,25 @@ function updateMysteryChaser(world: WorldRuntime, dt: number) {
   }
 }
 
+function computeRacePlacement(world: WorldRuntime): { racePosition: number; totalRacers: number } {
+  const px = world.player.x;
+  const competitors: number[] = [];
+  for (const r of world.rivals) {
+    competitors.push(r.x);
+  }
+  for (const rp of world.remotePlayers) {
+    competitors.push(rp.x);
+  }
+  if (competitors.length === 0) {
+    return { racePosition: 1, totalRacers: 1 };
+  }
+  let aheadCount = 0;
+  for (const cx of competitors) {
+    if (cx > px) aheadCount += 1;
+  }
+  return { racePosition: aheadCount + 1, totalRacers: competitors.length + 1 };
+}
+
 function checkCourseEnd(world: WorldRuntime): { summary: RunSummary | null } {
   const p = world.player;
   const distM = Math.max(0, Math.round((p.x - world.course.startX) / 28));
@@ -1629,6 +1947,9 @@ function checkCourseEnd(world: WorldRuntime): { summary: RunSummary | null } {
   if (!world.tutorialActive && !world.course.isEndless && !world.finished && p.x + p.w * 0.5 >= world.course.finishX) {
     world.finished = true;
     world.levelCleared = true;
+    if (world.cinematicSlowMoEnabled && world.course.levelNumber === 500) {
+      world.slowMoTimer = 0.6;
+    }
     soundEngine.playFinish();
     haptics.pulse([20, 25, 40]);
     triggerFlash(world, '#10B981', 0.35);
@@ -1647,12 +1968,25 @@ function checkCourseEnd(world: WorldRuntime): { summary: RunSummary | null } {
         ? 'Bronze'
         : 'None'
       : world.levelCleared
-      ? world.shardsCollected >= Math.max(2, Math.floor(world.shards.length * 0.5))
+      ? world.shardsCollected >= Math.max(2, Math.floor(world.shards.length * 0.5)) ||
+        world.elapsedTime <= world.course.goldTimeSec
         ? 'Gold'
-        : world.takedownsCount >= 1
+        : world.takedownsCount >= 1 || world.elapsedTime <= world.course.silverTimeSec
         ? 'Silver'
         : 'Bronze'
       : 'None';
+
+    const { racePosition, totalRacers } = computeRacePlacement(world);
+    const challengeTag = world.course.challengeTag ?? 'standard';
+    const challengeCompleted =
+      world.levelCleared &&
+      (challengeTag !== 'speedDemon' || !world.course.speedTargetSec || world.elapsedTime <= world.course.speedTargetSec) &&
+      (challengeTag !== 'perfectLanding' || world.perfectLandings >= 2) &&
+      (challengeTag !== 'noMistake' || !world.noMistakeBroken);
+
+    const baseCoins = world.levelCleared ? 55 + Math.min(90, Math.floor(levelNumber / 5)) : Math.min(35, Math.floor(distM / 15));
+    const bonusCoins = (challengeCompleted && challengeTag !== 'standard' ? 40 : 0) + (racePosition === 1 && totalRacers > 1 ? 45 : 0);
+    const baseXp = world.levelCleared ? 90 + Math.min(120, Math.floor(levelNumber / 4)) : Math.min(60, Math.floor(distM / 10));
 
     return {
       summary: {
@@ -1661,20 +1995,32 @@ function checkCourseEnd(world: WorldRuntime): { summary: RunSummary | null } {
         levelNumber,
         isEndless: Boolean(world.course.isEndless),
         cleared: world.levelCleared,
-        onTime: Boolean(world.course.isEndless) || world.levelCleared,
+        onTime: !world.course.speedTargetSec || world.elapsedTime <= world.course.speedTargetSec,
         caughtByChaser: world.caughtByChaser,
         fellInLava: world.fellInLava,
+        noMistakeBroken: world.noMistakeBroken,
         elapsedTime: world.elapsedTime,
-        timeRemaining: 0,
+        timeRemaining: world.course.speedTargetSec ? Math.max(0, world.course.speedTargetSec - world.elapsedTime) : 0,
         distanceMeters: distM,
         shardsCollected: world.shardsCollected,
         totalShards: world.shards.length,
         takedownsCount: world.takedownsCount,
         highPlacesPassed: world.highPlacesPassed,
         levelUpsEarned: world.levelUpsEarned,
+        coinsEarned: world.coinsEarned + baseCoins + bonusCoins,
+        xpEarned: world.xpEarned + baseXp,
+        perfectLandings: world.perfectLandings,
+        longestJumpMeters: p.longestJumpM,
+        secretsDiscovered: [...world.secretsFoundInRun],
+        challengeTag,
+        challengeCompleted,
+        raceRank: totalRacers > 1 ? racePosition : undefined,
+        totalRacers: totalRacers > 1 ? totalRacers : undefined,
+        tournamentId: world.tournamentId,
         score: world.score + distM * 10 + (world.levelCleared ? 500 : 0),
         medal,
         isNewBest: false,
+        replayFrames: [...world.replayFrames],
       },
     };
   }
@@ -1690,13 +2036,14 @@ export function getHudSnapshot(world: WorldRuntime): HudSnapshot {
   const progressPct = world.course.isEndless
     ? 0
     : Math.max(0, Math.min(100, Math.round(((p.x - world.course.startX) / totalDistPx) * 100)));
+  const { racePosition, totalRacers } = computeRacePlacement(world);
 
   return {
     levelNumber: world.runLevel,
     runLevel: world.runLevel,
     isEndless: Boolean(world.course.isEndless) && !world.tutorialActive,
     elapsedTime: world.elapsedTime,
-    timeRemaining: 0,
+    timeRemaining: world.course.speedTargetSec ? Math.max(0, world.course.speedTargetSec - world.elapsedTime) : 0,
     distanceMeters: distM,
     progressPct,
     shardsCollected: world.shardsCollected,
@@ -1709,6 +2056,19 @@ export function getHudSnapshot(world: WorldRuntime): HudSnapshot {
     highPlacesPassed: world.highPlacesPassed,
     levelUpsEarned: world.levelUpsEarned,
     comboMultiplier: getComboMultiplier(world.comboCount),
+    coinsEarned: world.coinsEarned,
+    xpEarned: world.xpEarned,
+    perfectLandings: world.perfectLandings,
+    secretsFoundInRun: world.secretsFoundInRun.length,
+    sprintActive: p.vx > world.course.baseSpeed + 65,
+    wallRunActive: p.action === 'wallRun',
+    districtName: world.course.districtName ?? 'Skyline Abyss',
+    weatherLabel: getWeatherDisplayName(world.course.weatherOverride ?? 'sunny'),
+    timeOfDayLabel: getTimeOfDayLabel(world.course.timeOfDayOverride ?? 'day'),
+    challengeTag: world.course.challengeTag ?? 'standard',
+    racePosition,
+    totalRacers,
+    activeEventTitle: world.activeEventTitle,
     activePowerUps: { ...world.powerUpTimers },
     tutorial: {
       active: world.tutorialActive,
@@ -1768,6 +2128,9 @@ export function serializeWorldRun(world: WorldRuntime): SavedRunSnapshot {
       airBoosters: world.airBoosters.map((ab) => ({ ...ab })),
       glassWalls: world.glassWalls.map((gw) => ({ id: gw.id, x: gw.x, y: gw.y, w: gw.w, h: gw.h, shattered: gw.shattered })),
       thermalVents: world.thermalVents.map((tv) => ({ ...tv })),
+      rotatingObstacles: world.rotatingObstacles.map((ro) => ({ ...ro })),
+      timedGates: world.timedGates.map((tg) => ({ ...tg })),
+      windZones: world.windZones.map((wz) => ({ ...wz })),
       hazards: world.hazards.map((h) => ({ ...h })),
       shards: world.shards.map((s) => ({ ...s })),
       powerUps: world.powerUps.map((pu) => ({ ...pu })),
@@ -1796,12 +2159,19 @@ export function serializeWorldRun(world: WorldRuntime): SavedRunSnapshot {
   return snapshot;
 }
 
-export function restoreWorldFromSave(save: SavedRunSnapshot): WorldRuntime {
+export function restoreWorldFromSave(
+  save: SavedRunSnapshot,
+  options?: { customization?: CharacterCustomization; skills?: ParkourSkills; cinematicSlowMoEnabled?: boolean }
+): WorldRuntime {
   const course =
     save.isEndless || save.courseId === 'endless-skyline'
       ? ENDLESS_COURSE
       : buildLevelCourse(save.levelNumber ?? 1);
-  const world = createWorldRuntime(course);
+  const world = createWorldRuntime(course, {
+    customization: options?.customization,
+    skills: options?.skills,
+    cinematicSlowMoEnabled: options?.cinematicSlowMoEnabled,
+  });
 
   if (save.endlessState) {
     world.endlessChunkCount = save.endlessState.endlessChunkCount;
@@ -1814,6 +2184,9 @@ export function restoreWorldFromSave(save: SavedRunSnapshot): WorldRuntime {
     world.airBoosters = (save.endlessState.airBoosters ?? []).map((ab) => ({ ...ab }));
     world.glassWalls = (save.endlessState.glassWalls ?? []).map((gw) => ({ ...gw, shards: [] }));
     world.thermalVents = (save.endlessState.thermalVents ?? []).map((tv) => ({ ...tv }));
+    world.rotatingObstacles = (save.endlessState.rotatingObstacles ?? []).map((ro) => ({ ...ro }));
+    world.timedGates = (save.endlessState.timedGates ?? []).map((tg) => ({ ...tg }));
+    world.windZones = (save.endlessState.windZones ?? []).map((wz) => ({ ...wz }));
     world.hazards = save.endlessState.hazards.map((h) => ({ ...h }));
     world.shards = save.endlessState.shards.map((s) => ({ ...s }));
     world.powerUps = (save.endlessState.powerUps ?? []).map((pu) => ({ ...pu }));
