@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Barlow Condensed', system-ui, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    font-family: var(--font-sans);
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes modal-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes menu-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes backdrop-fade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes shutter-wipe {
+  0% {
+    transform: translateX(-125%) skewX(-14deg);
+    opacity: 1;
+  }
+  42% {
+    transform: translateX(-5%) skewX(-14deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(125%) skewX(-14deg);
+    opacity: 0;
+  }
+}
+
+@keyframes shift-banner-slam {
+  0% {
+    opacity: 0;
+    transform: translateX(-42px) scale(1.08);
+  }
+  16% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  78% {
+    opacity: 1;
+    transform: translateX(6px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(38px) scale(0.97);
+  }
+}
+
+@keyframes trick-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-modal-pop {
+  animation: modal-pop 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-menu-rise {
+  animation: menu-rise 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-backdrop-fade {
+  animation: backdrop-fade 180ms ease-out both;
+}
+
+.animate-shutter-wipe {
+  animation: shutter-wipe 460ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.animate-shift-banner {
+  animation: shift-banner-slam 1450ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-trick-pop {
+  animation: trick-pop 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-modal-pop,
+  .animate-menu-rise,
+  .animate-backdrop-fade,
+  .animate-shift-banner,
+  .animate-trick-pop {
+    animation: none !important;
+  }
+
+  .animate-shutter-wipe {
+    display: none !important;
+  }
+}

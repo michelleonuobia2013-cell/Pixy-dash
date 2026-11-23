@@ -1,0 +1,8 @@
+{
+  "name": "Remix Parkour Pixel Dash",
+  "description": "Master challenging 2D obstacle courses with precise jumps and fluid movement in this fast-paced platformer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
